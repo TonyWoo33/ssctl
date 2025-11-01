@@ -1,0 +1,737 @@
+#!/usr/bin/env bash
+# ssctl - Shadowsocks control plane for user-level systemd
+# Version: 4.0.0
+
+set -Eeuo pipefail
+shopt -s nullglob
+
+APP_NAME="ssctl"
+APP_VERSION="4.0.0"
+CONF_DIR="${HOME}/.config/shadowsocks-rust"
+NODES_DIR="${CONF_DIR}/nodes"
+CURRENT_JSON="${CONF_DIR}/current.json"
+SYS_DIR="${HOME}/.config/systemd/user"
+
+BIN_RUST="sslocal"      # shadowsocks-rust
+BIN_RUST_PATH=""
+BIN_LIBEV="ss-local"    # shadowsocks-libev
+BIN_LIBEV_PATH=""
+
+DEFAULT_LOCAL_ADDR="127.0.0.1"
+DEFAULT_LOCAL_PORT="1080"
+
+# ===== 主题色与能力探测 =====
+# 颜色开关：环境变量覆盖 > 是否 TTY
+SSCTL_COLOR_DEFAULT=1
+if [ ! -t 1 ]; then SSCTL_COLOR_DEFAULT=0; fi   # 非交互输出默认关色
+if [ "${NO_COLOR:-}" != "" ]; then SSCTL_COLOR_DEFAULT=0; fi
+COLOR_FLAG="${SSCTL_COLOR:-${SSNODE_COLOR:-$SSCTL_COLOR_DEFAULT}}"
+if [ "${COLOR_FLAG:-1}" = "0" ]; then USE_COLOR=0; else USE_COLOR=1; fi
+
+# ANSI 色值（根据 USE_COLOR 设置）
+if [ "$USE_COLOR" -eq 1 ]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+
+  C_RED=$'\033[31m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'
+  C_MAGENTA=$'\033[35m'
+  C_CYAN=$'\033[36m'
+else
+  C_RESET=""; C_BOLD=""; C_DIM=""
+  C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_MAGENTA=""; C_CYAN=""
+fi
+
+# ===== 统一提示风格（主题符号 + 颜色）=====
+info(){ printf "%s[*]%s %s\n"   "$C_BLUE"  "$C_RESET" "$*"; }
+ok(){   printf "%s[✓]%s %s\n"   "$C_GREEN" "$C_RESET" "$*"; }
+warn(){ printf "%s[!]%s %s\n"   "$C_YELLOW""$C_RESET" "$*"; }
+err(){  printf "%s[✗]%s %s\n"   "$C_RED"   "$C_RESET" "$*"; }
+die(){  err "$*"; exit 1; }
+
+
+# -------- 美化小工具（宽度截断 + 细线分隔） --------
+_ellipsis(){  # $1=string  $2=width
+  local s="$1" w="${2:-20}" len=${#1}
+  if (( len > w )); then printf "%s…" "${s:0:$((w-1))}"; else printf "%s" "$s"; fi
+}
+
+# 灰色分隔线（默认 ASCII；开启 SSCTL_UTF8=1 且 UTF-8 locale 时用细线）
+_hr(){  # $1 = width
+  local cols="${1:-80}"
+  local utf8_flag="${SSCTL_UTF8:-${SSNODE_UTF8:-0}}"
+  local use_utf8=0
+  if [ "$utf8_flag" = "1" ] && printf '%s' "${LC_ALL:-}${LC_CTYPE:-}${LANG:-}" | grep -qi 'utf-8'; then
+    use_utf8=1
+  fi
+  printf '%s' "$C_DIM"
+  if [ "$use_utf8" -eq 1 ]; then
+    printf '%*s\n' "$cols" '' | tr ' ' '─'
+  else
+    printf '%*s\n' "$cols" '' | tr ' ' '-'
+  fi
+  printf '%s' "$C_RESET"
+}
+
+
+trap 'rc=$?; err "失败于: ${BASH_SOURCE[0]}:${LINENO} (函数: ${FUNCNAME[0]:-main})"; exit $rc' ERR
+set -E
+
+need_bin(){ command -v "$1" >/dev/null 2>&1 || die "缺少依赖：$1"; }
+
+init_dirs(){
+  umask 077
+  mkdir -p "${NODES_DIR}" "${SYS_DIR}"
+  chmod 700 "${CONF_DIR}" "${NODES_DIR}"
+}
+
+detect_pkg_manager(){
+  local candidates=(apt-get dnf pacman zypper apk brew)
+  local pm
+  for pm in "${candidates[@]}"; do
+    if command -v "$pm" >/dev/null 2>&1; then
+      echo "$pm"
+      return 0
+    fi
+  done
+  return 1
+}
+
+pm_pretty_name(){
+  case "$1" in
+    apt-get) echo "APT (Debian/Ubuntu)";;
+    dnf)     echo "DNF (Fedora/CentOS/RHEL)";;
+    pacman)  echo "pacman (Arch/Manjaro)";;
+    zypper)  echo "Zypper (openSUSE)";;
+    apk)     echo "apk (Alpine)";;
+    brew)    echo "Homebrew";;
+    *)       echo "$1";;
+  esac
+}
+
+run_pkg_command(){
+  local pm="$1"; shift
+  local cmd=("$pm" "$@")
+  if [ "$EUID" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+      cmd=(sudo "${cmd[@]}")
+    else
+      warn "缺少 sudo：请以 root 身份执行或先安装 sudo。命令：${cmd[*]}"
+      return 1
+    fi
+  fi
+  info "执行：${cmd[*]}"
+  if ! "${cmd[@]}"; then
+    warn "包管理器命令失败：${cmd[*]}"
+    return 1
+  fi
+}
+
+pkg_install(){
+  local pm
+  pm="$(detect_pkg_manager)" || { warn "无法自动识别包管理器，请手动安装依赖。"; return 1; }
+  local packages=("$@")
+  [ "${#packages[@]}" -gt 0 ] || return 0
+  case "$pm" in
+    apt-get)
+      run_pkg_command "$pm" update || return 1
+      run_pkg_command "$pm" install -y "${packages[@]}" || return 1
+      ;;
+    dnf)
+      run_pkg_command "$pm" install -y "${packages[@]}" || return 1
+      ;;
+    pacman)
+      run_pkg_command "$pm" -Sy --noconfirm "${packages[@]}" || return 1
+      ;;
+    zypper)
+      run_pkg_command "$pm" install -y "${packages[@]}" || return 1
+      ;;
+    apk)
+      run_pkg_command "$pm" add "${packages[@]}" || return 1
+      ;;
+    brew)
+      run_pkg_command "$pm" install "${packages[@]}" || return 1
+      ;;
+  *)
+    warn "尚未支持的包管理器：$pm，请手动安装：${packages[*]}"
+    return 1
+    ;;
+  esac
+  ok "已尝试通过 $(pm_pretty_name "$pm") 安装：${packages[*]}"
+}
+
+package_for_tool(){
+  local tool="$1" pm="$2"
+  case "$pm" in
+    apt-get)
+      case "$tool" in
+        jq|curl|qrencode|xclip) echo "$tool";;
+        wl-paste) echo "wl-clipboard";;
+        nc) echo "netcat-openbsd";;
+        sslocal) echo "shadowsocks-rust";;
+        ss-local) echo "shadowsocks-libev";;
+      esac
+      ;;
+    dnf)
+      case "$tool" in
+        jq|curl|qrencode|xclip) echo "$tool";;
+        wl-paste) echo "wl-clipboard";;
+        nc) echo "nmap-ncat";;
+        sslocal) echo "shadowsocks-rust";;
+        ss-local) echo "shadowsocks-libev";;
+      esac
+      ;;
+    pacman)
+      case "$tool" in
+        jq|curl|qrencode|xclip) echo "$tool";;
+        wl-paste) echo "wl-clipboard";;
+        nc) echo "openbsd-netcat";;
+        sslocal) echo "shadowsocks-rust";;
+        ss-local) echo "shadowsocks-libev";;
+      esac
+      ;;
+    zypper)
+      case "$tool" in
+        jq|curl|qrencode|xclip) echo "$tool";;
+        wl-paste) echo "wl-clipboard";;
+        nc) echo "netcat-openbsd";;
+        sslocal) echo "shadowsocks-rust";;
+        ss-local) echo "shadowsocks-libev";;
+      esac
+      ;;
+    apk)
+      case "$tool" in
+        jq|curl|qrencode|xclip) echo "$tool";;
+        wl-paste) echo "wl-clipboard";;
+        nc) echo "netcat-openbsd";;
+        sslocal) echo "shadowsocks-rust";;
+        ss-local) echo "shadowsocks-libev";;
+      esac
+      ;;
+    brew)
+      case "$tool" in
+        jq|curl|qrencode|xclip) echo "$tool";;
+        wl-paste) echo "wl-clipboard";;
+        nc) echo "netcat";;
+        sslocal) echo "shadowsocks-rust";;
+        ss-local) echo "shadowsocks-libev";;
+      esac
+      ;;
+  esac
+}
+
+self_check(){
+  local required_tools=(jq systemctl curl)
+  local missing=()
+  for t in "${required_tools[@]}"; do
+    if ! command -v "$t" >/dev/null 2>&1; then
+      missing+=("$t")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    die "缺少依赖：${missing[*]}（可运行：${APP_NAME} doctor --install）"
+  fi
+  init_dirs
+  BIN_RUST_PATH="$(command -v "${BIN_RUST}" 2>/dev/null || true)"
+  BIN_LIBEV_PATH="$(command -v "${BIN_LIBEV}" 2>/dev/null || true)"
+}
+
+cmd_doctor(){
+  local auto_install=0 dry_run=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -i|--install) auto_install=1; shift ;;
+      --dry-run) dry_run=1; shift ;;
+      -h|--help)
+        cat <<'DOC'
+用法：ssctl doctor [--install|-i] [--dry-run]
+说明：
+  - 默认仅检测依赖与运行环境。
+  - --install  自动尝试安装缺失依赖（需要 sudo 或 root 权限）。
+  - --dry-run  与 --install 配合使用时，仅输出将执行的安装命令，不真正执行。
+DOC
+        return 0
+        ;;
+      *)
+        die "未知参数：$1（使用 ssctl doctor --help 查看用法）"
+        ;;
+    esac
+  done
+
+  init_dirs
+
+  local pm=""
+  if pm="$(detect_pkg_manager)"; then
+    info "检测到包管理器：$(pm_pretty_name "$pm")"
+  else
+    warn "未识别到支持的包管理器，自动安装功能将不可用。"
+  fi
+
+  local header_width=80
+  _hr "$header_width"
+  printf "%-18s %-10s %s\n" "组件" "状态" "说明"
+  _hr "$header_width"
+
+  local missing_required=()
+  local missing_optional=()
+  local missing_client=()
+  local install_candidates=()
+
+  doctor_check(){
+    local tool="$1" label="$2" tier="$3"
+    local path
+    if path="$(command -v "$tool" 2>/dev/null)"; then
+      printf "%-18s %-10b %s\n" "$label" "${C_GREEN}OK${C_RESET}" "$path"
+    else
+      printf "%-18s %-10b %s\n" "$label" "${C_RED}缺失${C_RESET}" "未找到可执行文件：$tool"
+      case "$tier" in
+        required) missing_required+=("$tool") ;;
+        optional) missing_optional+=("$tool") ;;
+        client)   missing_client+=("$tool") ;;
+      esac
+      if [ -n "$pm" ]; then
+        local pkg
+        pkg="$(package_for_tool "$tool" "$pm")"
+        if [ -n "$pkg" ]; then
+          install_candidates+=("$pkg")
+        fi
+      fi
+    fi
+  }
+
+  doctor_check jq            "jq"            required
+  doctor_check curl          "curl"          required
+  doctor_check systemctl     "systemctl"     required
+  doctor_check qrencode      "qrencode"      optional
+  doctor_check nc            "nc"            optional
+  doctor_check xclip         "xclip"         optional
+  doctor_check wl-paste      "wl-paste"      optional
+  doctor_check sslocal       "shadowsocks-rust" client
+  doctor_check ss-local      "shadowsocks-libev" client
+
+  _hr "$header_width"
+
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl --user list-unit-files --no-legend >/dev/null 2>&1; then
+      ok "systemd --user 已可用。"
+    else
+      warn "systemd --user 无法访问。可能需要执行：loginctl enable-linger $USER && 重登，或确认系统支持 user-level systemd。"
+    fi
+  fi
+
+  if [ "${#missing_required[@]}" -eq 0 ]; then
+    ok "核心依赖已满足。"
+  else
+    err "核心依赖缺失：${missing_required[*]}"
+  fi
+
+  if [ "${#missing_client[@]}" -eq 0 ]; then
+    ok "Shadowsocks 客户端可用。"
+  else
+    warn "Shadowsocks 客户端缺失：${missing_client[*]}（可任选其一安装）。"
+  fi
+
+  if [ "${#missing_optional[@]}" -gt 0 ]; then
+    warn "可选工具缺失：${missing_optional[*]}（部分功能将受限）。"
+  else
+    ok "可选工具齐全。"
+  fi
+
+  if [ "${#install_candidates[@]}" -gt 0 ]; then
+    mapfile -t install_candidates < <(printf '%s\n' "${install_candidates[@]}" | awk 'NF' | sort -u)
+    info "建议安装的包：${install_candidates[*]}"
+    if [ "$auto_install" -eq 1 ]; then
+      if [ "$dry_run" -eq 1 ]; then
+        if [ -n "$pm" ]; then
+          info "dry-run：将执行的安装命令（未真正执行）："
+          printf '  %s %s\n' "$pm" "${install_candidates[*]}"
+        else
+          warn "dry-run：未能确定包管理器，请手动安装：${install_candidates[*]}"
+        fi
+      else
+        if [ -n "$pm" ]; then
+          pkg_install "${install_candidates[@]}" || warn "自动安装部分包失败，请检查上述输出。"
+        else
+          warn "未能确定包管理器，请手动安装：${install_candidates[*]}"
+        fi
+      fi
+    else
+      info "可运行：ssctl doctor --install 进行自动安装（需 sudo/root）。"
+    fi
+  else
+    ok "没有可自动安装的缺失包。"
+  fi
+
+  if [ "${#missing_required[@]}" -eq 0 ]; then
+    ok "环境检测完成，可执行：ssctl start <节点名>"
+  else
+    err "请先补齐核心依赖后再继续使用。"
+    return 1
+  fi
+}
+
+engine_check(){   # $1=engine rust|libev
+  case "$1" in
+    rust)
+      [ -x "${BIN_RUST_PATH}" ] || die "找不到 sslocal，请安装 shadowsocks-rust。"
+      ;;
+    libev)
+      [ -x "${BIN_LIBEV_PATH}" ] || die "需要 shadowsocks-libev：未找到 ss-local。"
+      ;;
+  esac
+}
+
+node_json_path(){ printf "%s/%s.json" "${NODES_DIR}" "$1"; }
+
+resolve_name(){
+  local name="${1:-}"
+  if [ -z "$name" ] || [ "$name" = "current" ]; then
+    [ -L "${CURRENT_JSON}" ] || die "当前未设置默认节点：请先 ssctl switch <name>"
+    basename "$(readlink -f "${CURRENT_JSON}")" .json
+  else
+    echo "$name"
+  fi
+}
+
+json_get(){
+  local name="$1" key="$2"
+  local p; p="$(node_json_path "$name")"
+  [ -r "$p" ] || die "找不到或无法读取节点 JSON：$p"
+  jq -r ".${key} // empty" <"$p"
+}
+
+# 过滤掉内部生成的 _libev_* 临时配置
+list_nodes(){
+  for f in "${NODES_DIR}"/*.json; do
+    [ -e "$f" ] || continue
+    base="$(basename "${f%.json}")"
+    case "$base" in
+      _libev_*) continue ;;
+    esac
+    printf "%s\n" "$base"
+  done
+}
+
+unit_name_for(){
+  local name="$1"
+  local lp; lp="$(json_get "$name" local_port)"; [ -n "$lp" ] || lp="${DEFAULT_LOCAL_PORT}"
+  printf "sslocal-%s-%s.service" "$name" "$lp"
+}
+
+is_aead_method(){
+  case "$1" in
+    chacha20-ietf-poly1305|xchacha20-ietf-poly1305|aes-256-gcm|aes-128-gcm) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+pick_engine(){
+  local name="$1"
+  local engine method
+  engine="$(json_get "$name" engine | tr '[:upper:]' '[:lower:]')"
+  method="$(json_get "$name" method | tr '[:upper:]' '[:lower:]')"
+  case "$engine" in
+    rust|libev) echo "$engine" ;;
+    auto|"")    if is_aead_method "$method"; then echo "rust"; else echo "libev"; fi ;;
+    *)          warn "未知 engine=${engine}，按 auto 处理"; if is_aead_method "$method"; then echo "rust"; else echo "libev"; fi ;;
+  esac
+}
+
+unit_exists(){
+  local name="$1" u; u="$(unit_name_for "$name")"
+  systemctl --user list-unit-files --no-legend "$u" 2>/dev/null | awk '{print $1}' | grep -qx "$u"
+}
+
+current_running_node(){
+  local u core name
+  u="$(systemctl --user list-units --no-legend 'sslocal-*.service' 2>/dev/null | awk '$4=="running"{print $1}' | head -n1)"
+  [ -n "$u" ] || return 1
+  core="${u#sslocal-}"
+  core="${core%.service}"
+  name="${core%-*}"
+  printf "%s\n" "$name"
+}
+
+# 停止所有已有单元（单实例）
+stop_all_units(){
+  set +e
+  local any=0
+  while read -r u; do
+    [ -n "$u" ] || continue
+    any=1
+    systemctl --user disable --now "$u" 2>/dev/null || true
+    rm -f "${SYS_DIR}/${u}" 2>/dev/null || true
+    echo " - stopped $u"
+  done < <(systemctl --user list-unit-files 'sslocal-*' --no-legend | awk '{print $1}')
+  [ "$any" = 1 ] && systemctl --user daemon-reload || true
+  set -e
+}
+
+write_unit(){
+  local name="$1"
+  local json_path; json_path="$(node_json_path "$name")"
+  [ -r "$json_path" ] || die "找不到节点 JSON：$json_path"
+  local unit; unit="$(unit_name_for "$name")"
+
+  local lp; lp="$(json_get "$name" local_port)"; [ -n "$lp" ] || lp="${DEFAULT_LOCAL_PORT}"
+  local engine; engine="$(pick_engine "$name")"
+  engine_check "$engine"
+
+  local exec_path=""
+  case "$engine" in
+    rust)  exec_path="${BIN_RUST_PATH}" ;;
+    libev) exec_path="${BIN_LIBEV_PATH}" ;;
+  esac
+  if [ "$engine" = "libev" ] && [ ! -x "$exec_path" ]; then
+    die "需要 shadowsocks-libev：未找到 ss-local。请先安装：sudo apt install -y shadowsocks-libev"
+  fi
+
+  # 生成 libev 兼容 JSON（仅在 libev 时）
+  local run_cfg="${json_path}"
+  if [ "$engine" = "libev" ]; then
+    run_cfg="${NODES_DIR}/_libev_${name}.json"
+    jq -n \
+      --argjson server_port "$(jq -r '.server_port' "$json_path")" \
+      --arg server       "$(jq -r '.server' "$json_path")" \
+      --arg password     "$(jq -r '.password' "$json_path")" \
+      --arg method       "$(jq -r '.method' "$json_path")" \
+      --arg laddr        "$(jq -r '.local_address // "127.0.0.1"' "$json_path")" \
+      --argjson lport    "$(jq -r '.local_port // 1080' "$json_path")" \
+      --arg plugin       "$(jq -r '.plugin // empty' "$json_path")" \
+      --arg plugin_opts  "$(jq -r '.plugin_opts // empty' "$json_path")" \
+      --argjson timeout  "$(jq -r '.timeout // 300' "$json_path")" \
+      '{
+         server: $server,
+         server_port: $server_port,
+         password: $password,
+         method: $method,
+         local_address: $laddr,
+         local_port: $lport,
+         timeout: $timeout
+       }
+       + (if ($plugin|length)>0 then {plugin:$plugin} else {} end)
+       + (if ($plugin_opts|length)>0 then {plugin_opts:$plugin_opts} else {} end)' \
+      > "$run_cfg"
+    chmod 600 "$run_cfg"
+  fi
+
+  cat > "${SYS_DIR}/${unit}" <<EOF
+[Unit]
+Description=Shadowsocks local client (${name}:${lp}, engine=${engine})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart="${exec_path}" -c "${run_cfg}"
+Restart=always
+RestartSec=2s
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+UMask=0077
+ReadWritePaths=${CONF_DIR}
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=default.target
+EOF
+  ok "已生成 unit: ${unit}"
+}
+
+# 等待端口监听（最多 N 秒）
+wait_listen(){
+  local name="$1" timeout="${2:-8}"
+  local laddr lport
+  laddr="$(json_get "$name" local_address)"; [ -n "$laddr" ] || laddr="$DEFAULT_LOCAL_ADDR"
+  lport="$(json_get "$name" local_port)";   [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
+
+  local i=0
+  while [ "$i" -lt "$timeout" ]; do
+    if command -v nc >/dev/null 2>&1; then
+      nc -z "$laddr" "$lport" -w 1 && return 0
+    else
+      (exec 3<>"/dev/tcp/${laddr}/${lport}") 2>/dev/null && { exec 3>&-; return 0; }
+    fi
+    sleep 1; i=$((i+1))
+  done
+  return 1
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+show_version(){
+  echo "${APP_NAME} ${APP_VERSION}"
+}
+
+short_usage(){
+  cat <<'U'
+用法：ssctl <命令> [节点名]
+
+命令（简洁版）：
+  add <name> [--from-file FILE | --server HOST --port N --method M --password P
+              [--local-port N] [--engine E] [--plugin X] [--plugin-opts Y]]
+              新增/导入节点（不自动启动；若 current 未设置，会指向新节点）
+
+  remove <name> [--purge] [-y|--yes]
+              移除节点：停止并删除 unit、删除 _libev_ 兼容文件；
+              默认保留 nodes/<name>.json；带 --purge 同时删除主配置
+
+  start [name]  启动（含自检/单实例/自动生成 unit/启动后探测）
+  stop  [name]  停止当前/指定节点
+  switch <name> 切换“当前节点”（仅切换，不启动）
+  list          用表格列出所有节点（RUN 状态/端口/算法/引擎/UNIT）
+  show [name] [--qrcode]
+              查看节点配置、状态或生成二维码
+
+  monitor [name] [--url URL] [--interval N] [--count M] [--no-dns] [--tail]
+              实时监控：连通性/时延/速率/成功率；可选跟随日志
+  logs [name] -f
+              跟随日志（tail -f）
+  latency|test  测试所有节点延迟并排序
+  sub           管理订阅 (add, list, remove, update)
+
+  doctor [--install] [--dry-run]
+              环境体检：检测并可选自动安装依赖
+
+  clear         清理所有 ssctl 生成的内容（保留 nodes/）
+  env [proxy [name] | noproxy]
+              输出设置/清除代理环境变量的命令（配合 eval 使用）
+  noproxy     停止所有代理单元并切换为直连模式（提示如何清理环境变量）
+  help          查看详细说明
+U
+}
+
+long_help(){
+  cat <<'H'
+说明：
+- 单实例：start 会先停止所有正在运行的 Shadowsocks 单元，避免端口冲突。
+- 默认当前节点：start/stop/show/logs/list/probe 均可不带参数，作用于 current.json 指向的节点。
+- 双引擎：AEAD 算法→ rust (sslocal)；非 AEAD（如 aes-256-cfb）→ libev (ss-local)。
+  * libev 模式下自动生成 _libev_<name>.json，剔除 libev 不识别的键。
+- start 启动成功后会自动执行 probe；list/show/logs 有颜色高亮（可用 NO_COLOR=1 关闭）。
+
+add：
+  - 从文件导入：ssctl add <name> --from-file /path/node.json
+  - 参数新建：  ssctl add <name> --server HOST --port N --method M --password P
+                 [--local-port N] [--engine auto|rust|libev] [--plugin X] [--plugin-opts Y]
+  - 创建后不会自动启动；若 current 未设置，会自动指向新节点。
+
+remove：
+  - ssctl remove <name>           # 停止并删除 unit，删除 _libev_ 兼容文件，保留主配置
+  - ssctl remove <name> --purge   # 以上 + 删除 nodes/<name>.json
+  - 加 -y/--yes 无需确认
+  - 如 current 指向被删节点，会自动清空指向。
+  
+monitor：
+  - ssctl monitor               # 监控 current 节点，默认每 5 秒测一次，带 DNS
+  - ssctl monitor mynode --interval 2 --count 30
+  - ssctl monitor --no-dns --url http://1.1.1.1 --tail
+  - 支持选项在前或在后；-i 等价 --interval，-n 等价 --count，-f/-t 等价 --tail
+    指标含义：
+      OK/FAIL          是否连通（curl 返回码 & HTTP 状态）
+      RTTms            time_total（ms）
+      TTFB             time_starttransfer（ms）
+      CONN             time_connect（ms）
+      SPEED(B/s)       speed_download（字节/秒）
+    “--no-dns” 用 --socks5 + 1.1.1.1 仅测链路，不测域名解析
+
+doctor：
+  - ssctl doctor                    # 仅做检测与报告
+  - ssctl doctor --install          # 自动安装缺失依赖（需 sudo/root）
+  - ssctl doctor --install --dry-run # 预览将执行的安装命令
+  - 检查内容包含：jq/curl 等核心命令、Shadowsocks 客户端、systemd --user 可用性等
+
+env：
+  - ssctl env proxy [name]
+      输出将 ALL_PROXY/http_proxy/https_proxy 等指向本地 SOCKS 端口的 export 语句。
+      用法：eval "$(ssctl env proxy)"   # 指向 current 节点
+           eval "$(ssctl env proxy mynode)"
+  - ssctl env noproxy|off
+      输出清空代理环境变量的 unset 语句。
+      用法：eval "$(ssctl env noproxy)"
+
+noproxy：
+  - ssctl noproxy
+      停止所有 Shadowsocks 单元并清空 current 指向，进入直连模式。
+      如需在当前 shell 同步关闭代理变量，执行：eval "$(ssctl env noproxy)"
+
+JSON 关键字段：
+  server, server_port, password, method,
+  local_address(默认 127.0.0.1), local_port(默认 1080),
+  plugin, plugin_opts（可选）
+  engine（可选：auto|rust|libev，默认 auto）
+
+排错：
+  - 自动补全: source ssctl-completion.sh
+  - 环境体检：ssctl doctor
+
+  - 端口占用：本脚本单实例策略会先停其他 unit。
+  - libev 退出：看 journalctl；或 /usr/bin/ss-local -vv -c <_libev_*.json> 前台跑。
+  - 仅 IP 通但域名不通：rust 可在 JSON 配置 dns；libev 依赖系统 DNS。
+H
+echo "版本：${APP_VERSION}"
+}
+
+
+main(){
+  local cmd="${1:-}"; shift || true
+  case "${cmd:-}" in
+    -v|--version) show_version; exit 0 ;;
+    "" ) short_usage ;;
+    help|-h|--help) long_help ;;
+    add)     cmd_add "$@" ;;
+    remove|rm)  cmd_remove "$@" ;;
+    start)   cmd_start "${1:-}" ;;
+    stop)    cmd_stop  "${1:-}" ;;
+    switch)  cmd_switch "${1:-}" ;;
+    list|ls) cmd_list ;;
+    show|status) cmd_show "${1:-}" ;;
+    monitor) cmd_monitor "$@" ;;
+    logs|journal) cmd_logs "$@" ;;
+    latency|test) cmd_latency "$@" ;;
+    sub) cmd_sub "$@" ;;
+    doctor) cmd_doctor "$@" ;;
+
+
+    probe|check)
+      self_check
+      set +e; probe "${1:-}"; local rc=$?; set -e; exit $rc
+      ;;
+    clear)   cmd_clear ;;
+    env)     cmd_env "$@" ;;
+    noproxy) cmd_noproxy ;;
+    *)
+      warn "未知命令：$cmd"; short_usage; exit 1 ;;
+  esac
+}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+
+# Load all function scripts
+for f in "${SCRIPT_DIR}"/functions/*.sh; do
+  # shellcheck disable=SC1090
+  . "$f"
+done
+
+main "$@" || true
