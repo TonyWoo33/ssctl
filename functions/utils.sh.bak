@@ -2,7 +2,7 @@
 
 urlsafe_b64_decode(){
     local b64
-    b64=$(printf '%s' "$1" | tr -d '\r\n ' | tr -- '-_' '+/')
+    b64=$(printf '%s' "$1" | tr -d '\r\n ' | tr '-_' '+/')
     # Add padding if needed
     case $(( ${#b64} % 4 )) in
         2) b64+="==" ;;
