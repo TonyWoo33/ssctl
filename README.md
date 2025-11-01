@@ -19,10 +19,12 @@
    cd ssctl-main
    ```
 
-2. 将 `ssctl` 脚本加入 `PATH`，例如：
+2. 安装可执行脚本与函数库：
 
    ```bash
+   install -d ~/.local/bin ~/.local/share/ssctl
    install -m 755 ssctl ~/.local/bin/ssctl
+   cp -r functions ~/.local/share/ssctl/
    install -m 644 ssctl-completion.sh ~/.local/share/ssctl/ssctl-completion.sh
    ```
 

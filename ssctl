@@ -728,8 +728,26 @@ main(){
 }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
+resolve_lib_dir(){
+  if [ -n "${SSCTL_LIB_DIR:-}" ] && [ -d "${SSCTL_LIB_DIR}/functions" ]; then
+    printf '%s\n' "${SSCTL_LIB_DIR}"
+    return 0
+  fi
+  if [ -d "${SCRIPT_DIR}/functions" ]; then
+    printf '%s\n' "${SCRIPT_DIR}"
+    return 0
+  fi
+  if [ -d "${HOME}/.local/share/ssctl/functions" ]; then
+    printf '%s\n' "${HOME}/.local/share/ssctl"
+    return 0
+  fi
+  return 1
+}
+
+LIB_DIR="$(resolve_lib_dir)" || die "未找到 ssctl functions 目录。请确认已安装 functions/*.sh（可设置 SSCTL_LIB_DIR 指向安装路径）。"
+
 # Load all function scripts
-for f in "${SCRIPT_DIR}"/functions/*.sh; do
+for f in "${LIB_DIR}"/functions/*.sh; do
   # shellcheck disable=SC1090
   . "$f"
 done
