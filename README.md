@@ -29,7 +29,33 @@
    install -m 644 ssctl-completion.sh ~/.local/share/ssctl/ssctl-completion.sh
    ```
 
-3. 初始化依赖：
+3. 创建默认配置（后续可手动调整）：
+
+   ```bash
+   mkdir -p ~/.config/ssctl
+   cat <<'EOF' > ~/.config/ssctl/config.json
+   {
+     "color": "auto",
+     "probe": {"url": "https://www.google.com/generate_204"},
+     "latency": {"url": "https://www.google.com/generate_204"},
+     "monitor": {
+       "url": "https://www.google.com/generate_204",
+       "interval": 5,
+       "no_dns_url": "http://1.1.1.1"
+     },
+     "doctor": {
+       "include_clipboard": true,
+       "include_qrencode": true,
+       "include_libev": true
+     },
+     "plugins": {
+       "paths": []
+     }
+   }
+   EOF
+   ```
+
+4. 初始化依赖：
 
    ```bash
    ssctl doctor --install
@@ -37,7 +63,7 @@
 
    如需先预览将执行的命令，可附加 `--dry-run`。
 
-4. 在 `~/.bashrc` 或 `~/.zshrc` 中启用补全：
+5. 在 `~/.bashrc` 或 `~/.zshrc` 中启用补全：
 
    ```bash
    source ~/.local/share/ssctl/ssctl-completion.sh

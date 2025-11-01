@@ -731,22 +731,6 @@ wait_listen(){
   return 1
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 show_version(){
   echo "${APP_NAME} ${APP_VERSION}"
 }
