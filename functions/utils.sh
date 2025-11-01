@@ -28,3 +28,46 @@ url_encode(){
     local raw="$*"
     printf '%s' "$raw" | jq -sRr @uri
 }
+
+# Parse plugin-related query parameters from an ss:// URL query string.
+# Usage: parse_plugin_params "query" plugin_var plugin_opts_var
+parse_plugin_params(){
+    local query="$1" out_plugin="$2" out_plugin_opts="$3"
+    local plugin="" plugin_opts=""
+
+    if [ -n "$query" ]; then
+        local IFS='&'
+        read -ra kv_pairs <<< "$query"
+        for kv_pair in "${kv_pairs[@]}"; do
+            [ -n "$kv_pair" ] || continue
+            local key="${kv_pair%%=*}"
+            local value=""
+            if [[ "$kv_pair" == *=* ]]; then
+                value="${kv_pair#*=}"
+            fi
+            value="$(url_decode "$value")"
+            case "$key" in
+                plugin)
+                    plugin="${value%%;*}"
+                    if [[ "$value" == *";"* ]]; then
+                        plugin_opts="${value#*;}"
+                    fi
+                    ;;
+                plugin_opts|plugin-opts)
+                    if [ -n "$plugin_opts" ]; then
+                        plugin_opts="${plugin_opts};${value}"
+                    else
+                        plugin_opts="$value"
+                    fi
+                    ;;
+            esac
+        done
+    fi
+
+    if [ -n "$out_plugin" ]; then
+        printf -v "$out_plugin" '%s' "$plugin"
+    fi
+    if [ -n "$out_plugin_opts" ]; then
+        printf -v "$out_plugin_opts" '%s' "$plugin_opts"
+    fi
+}

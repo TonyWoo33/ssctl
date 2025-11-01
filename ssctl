@@ -795,6 +795,7 @@ add：
   - 参数新建：  ssctl add <name> --server HOST --port N --method M --password P
                  [--local-port N] [--engine auto|rust|libev] [--plugin X] [--plugin-opts Y]
   - 创建后不会自动启动；若 current 未设置，会自动指向新节点。
+  - 剪贴板导入的 ss:// 链接会解析并保留 plugin / plugin_opts 参数。
 
 remove：
   - ssctl remove <name>           # 停止并删除 unit，删除 _libev_ 兼容文件，保留主配置

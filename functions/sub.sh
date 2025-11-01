@@ -114,34 +114,7 @@ cmd_sub(){
             local password="$password_part"
 
             local plugin="" plugin_opts=""
-            if [ -n "$query" ]; then
-              local IFS='&'
-              read -ra kv_pairs <<< "$query"
-              for kv_pair in "${kv_pairs[@]}"; do
-                [ -n "$kv_pair" ] || continue
-                local key="${kv_pair%%=*}"
-                local value=""
-                if [[ "$kv_pair" == *=* ]]; then
-                  value="${kv_pair#*=}"
-                fi
-                value="$(url_decode "$value")"
-                case "$key" in
-                  plugin)
-                    plugin="${value%%;*}"
-                    if [[ "$value" == *";"* ]]; then
-                      plugin_opts="${value#*;}"
-                    fi
-                    ;;
-                  plugin_opts|plugin-opts)
-                    if [ -n "$plugin_opts" ]; then
-                      plugin_opts="${plugin_opts};${value}"
-                    else
-                      plugin_opts="$value"
-                    fi
-                    ;;
-                esac
-              done
-            fi
+            parse_plugin_params "$query" plugin plugin_opts
 
             local node_suffix="$fragment"
             if [ -z "$node_suffix" ]; then
