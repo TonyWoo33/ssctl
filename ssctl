@@ -20,30 +20,71 @@ BIN_LIBEV_PATH=""
 DEFAULT_LOCAL_ADDR="127.0.0.1"
 DEFAULT_LOCAL_PORT="1080"
 
+# ===== 配置默认值 =====
+CONFIG_PATH_DEFAULT="${HOME}/.config/ssctl/config.json"
+CONFIG_DEFAULT_JSON='{
+  "color": "auto",
+  "probe": {"url": "https://www.google.com/generate_204"},
+  "latency": {"url": "https://www.google.com/generate_204"},
+  "monitor": {
+    "url": "https://www.google.com/generate_204",
+    "interval": 5,
+    "no_dns_url": "http://1.1.1.1"
+  },
+  "doctor": {
+    "include_clipboard": true,
+    "include_qrencode": true,
+    "include_libev": true
+  },
+  "plugins": {
+    "paths": []
+  }
+}'
+
+CONFIG_PATH=""
+CONFIG_DATA=""
+CONFIG_COLOR_MODE=""
+
+DEFAULT_PROBE_URL="https://www.google.com/generate_204"
+DEFAULT_LATENCY_URL="$DEFAULT_PROBE_URL"
+DEFAULT_MONITOR_URL="$DEFAULT_PROBE_URL"
+DEFAULT_MONITOR_NO_DNS_URL="http://1.1.1.1"
+DEFAULT_MONITOR_INTERVAL=5
+
+CONFIG_DOCTOR_INCLUDE_CLIPBOARD=1
+CONFIG_DOCTOR_INCLUDE_QRENCODE=1
+CONFIG_DOCTOR_INCLUDE_LIBEV=1
+
 # ===== 主题色与能力探测 =====
-# 颜色开关：环境变量覆盖 > 是否 TTY
-SSCTL_COLOR_DEFAULT=1
-if [ ! -t 1 ]; then SSCTL_COLOR_DEFAULT=0; fi   # 非交互输出默认关色
-if [ "${NO_COLOR:-}" != "" ]; then SSCTL_COLOR_DEFAULT=0; fi
-COLOR_FLAG="${SSCTL_COLOR:-${SSNODE_COLOR:-$SSCTL_COLOR_DEFAULT}}"
-if [ "${COLOR_FLAG:-1}" = "0" ]; then USE_COLOR=0; else USE_COLOR=1; fi
+# 颜色开关：环境变量覆盖 > 配置文件 > 是否 TTY
+init_color_defaults(){
+  SSCTL_COLOR_DEFAULT=1
+  if [ ! -t 1 ]; then SSCTL_COLOR_DEFAULT=0; fi   # 非交互输出默认关色
+  if [ "${NO_COLOR:-}" != "" ]; then SSCTL_COLOR_DEFAULT=0; fi
+  COLOR_FLAG="${SSCTL_COLOR:-${SSNODE_COLOR:-$SSCTL_COLOR_DEFAULT}}"
+}
 
-# ANSI 色值（根据 USE_COLOR 设置）
-if [ "$USE_COLOR" -eq 1 ]; then
-  C_RESET=$'\033[0m'
-  C_BOLD=$'\033[1m'
-  C_DIM=$'\033[2m'
+apply_color_palette(){
+  if [ "${COLOR_FLAG:-1}" = "0" ]; then USE_COLOR=0; else USE_COLOR=1; fi
+  if [ "$USE_COLOR" -eq 1 ]; then
+    C_RESET=$'\033[0m'
+    C_BOLD=$'\033[1m'
+    C_DIM=$'\033[2m'
 
-  C_RED=$'\033[31m'
-  C_GREEN=$'\033[32m'
-  C_YELLOW=$'\033[33m'
-  C_BLUE=$'\033[34m'
-  C_MAGENTA=$'\033[35m'
-  C_CYAN=$'\033[36m'
-else
-  C_RESET=""; C_BOLD=""; C_DIM=""
-  C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_MAGENTA=""; C_CYAN=""
-fi
+    C_RED=$'\033[31m'
+    C_GREEN=$'\033[32m'
+    C_YELLOW=$'\033[33m'
+    C_BLUE=$'\033[34m'
+    C_MAGENTA=$'\033[35m'
+    C_CYAN=$'\033[36m'
+  else
+    C_RESET=""; C_BOLD=""; C_DIM=""
+    C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_MAGENTA=""; C_CYAN=""
+  fi
+}
+
+init_color_defaults
+apply_color_palette
 
 # ===== 统一提示风格（主题符号 + 颜色）=====
 info(){ printf "%s[*]%s %s\n"   "$C_BLUE"  "$C_RESET" "$*"; }
@@ -217,10 +258,73 @@ package_for_tool(){
         wl-paste) echo "wl-clipboard";;
         nc) echo "netcat";;
         sslocal) echo "shadowsocks-rust";;
-        ss-local) echo "shadowsocks-libev";;
+    ss-local) echo "shadowsocks-libev";;
       esac
       ;;
   esac
+}
+
+CONFIG_PLUGIN_PATHS=()
+
+load_config(){
+  local specified_path="${1:-}"
+  local path=""
+  if [ -n "$specified_path" ]; then
+    path="$specified_path"
+  elif [ -n "${SSCTL_CONFIG:-}" ]; then
+    path="${SSCTL_CONFIG}"
+  else
+    path="${CONFIG_PATH_DEFAULT}"
+  fi
+  CONFIG_PATH="$path"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    CONFIG_DATA="$CONFIG_DEFAULT_JSON"
+    return 0
+  fi
+
+  if [ -f "$path" ]; then
+    if ! CONFIG_DATA="$(jq -s '.[0] * (.[1] // {})' <(printf '%s' "$CONFIG_DEFAULT_JSON") "$path" 2>/dev/null)"; then
+      warn "配置文件解析失败：$path，已回退默认配置。"
+      CONFIG_DATA="$CONFIG_DEFAULT_JSON"
+    fi
+  else
+    CONFIG_DATA="$CONFIG_DEFAULT_JSON"
+  fi
+
+  CONFIG_COLOR_MODE="$(printf '%s' "$CONFIG_DATA" | jq -r '.color // empty')"
+  DEFAULT_PROBE_URL="$(printf '%s' "$CONFIG_DATA" | jq -r '.probe.url')"
+  DEFAULT_LATENCY_URL="$(printf '%s' "$CONFIG_DATA" | jq -r '.latency.url')"
+  DEFAULT_MONITOR_URL="$(printf '%s' "$CONFIG_DATA" | jq -r '.monitor.url')"
+  DEFAULT_MONITOR_INTERVAL="$(printf '%s' "$CONFIG_DATA" | jq -r '.monitor.interval')"
+  DEFAULT_MONITOR_NO_DNS_URL="$(printf '%s' "$CONFIG_DATA" | jq -r '.monitor.no_dns_url')"
+  CONFIG_DOCTOR_INCLUDE_CLIPBOARD="$(printf '%s' "$CONFIG_DATA" | jq -r 'if .doctor.include_clipboard then 1 else 0 end')"
+  CONFIG_DOCTOR_INCLUDE_QRENCODE="$(printf '%s' "$CONFIG_DATA" | jq -r 'if .doctor.include_qrencode then 1 else 0 end')"
+  CONFIG_DOCTOR_INCLUDE_LIBEV="$(printf '%s' "$CONFIG_DATA" | jq -r 'if .doctor.include_libev then 1 else 0 end')"
+
+  CONFIG_PLUGIN_PATHS=()
+  if mapfile -t CONFIG_PLUGIN_PATHS < <(printf '%s' "$CONFIG_DATA" | jq -r '.plugins.paths[]?' 2>/dev/null); then
+    true
+  else
+    CONFIG_PLUGIN_PATHS=()
+  fi
+}
+
+apply_config_color(){
+  local mode="${1:-}"
+  if [ -z "$mode" ] || [ "$mode" = "auto" ]; then
+    COLOR_FLAG="${SSCTL_COLOR:-${SSNODE_COLOR:-$SSCTL_COLOR_DEFAULT}}"
+  else
+    case "$mode" in
+      on|true|1) COLOR_FLAG=1 ;;
+      off|false|0) COLOR_FLAG=0 ;;
+      *)
+        warn "未知 color 配置：$mode（支持 auto/on/off）"
+        COLOR_FLAG="${SSCTL_COLOR:-${SSNODE_COLOR:-$SSCTL_COLOR_DEFAULT}}"
+        ;;
+    esac
+  fi
+  apply_color_palette
 }
 
 self_check(){
@@ -241,17 +345,30 @@ self_check(){
 
 cmd_doctor(){
   local auto_install=0 dry_run=0
+  local include_clipboard="$CONFIG_DOCTOR_INCLUDE_CLIPBOARD"
+  local include_qrencode="$CONFIG_DOCTOR_INCLUDE_QRENCODE"
+  local include_libev="$CONFIG_DOCTOR_INCLUDE_LIBEV"
+
   while [ $# -gt 0 ]; do
     case "$1" in
       -i|--install) auto_install=1; shift ;;
       --dry-run) dry_run=1; shift ;;
+      --without-clipboard) include_clipboard=0; shift ;;
+      --with-clipboard) include_clipboard=1; shift ;;
+      --without-qrcode) include_qrencode=0; shift ;;
+      --with-qrcode) include_qrencode=1; shift ;;
+      --without-libev) include_libev=0; shift ;;
+      --with-libev) include_libev=1; shift ;;
       -h|--help)
         cat <<'DOC'
-用法：ssctl doctor [--install|-i] [--dry-run]
+用法：ssctl doctor [--install|-i] [--dry-run] [--without-clipboard] [--without-qrcode] [--without-libev]
 说明：
   - 默认仅检测依赖与运行环境。
-  - --install  自动尝试安装缺失依赖（需要 sudo 或 root 权限）。
-  - --dry-run  与 --install 配合使用时，仅输出将执行的安装命令，不真正执行。
+  - --install           自动尝试安装缺失依赖（需要 sudo 或 root 权限）。
+  - --dry-run           与 --install 配合使用时，仅输出将执行的安装命令，不真正执行。
+  - --without-clipboard 跳过剪贴板工具 (xclip/wl-paste) 检测。
+  - --without-qrcode    跳过 qrencode 检测。
+  - --without-libev     跳过 ss-local (libev) 客户端检测。
 DOC
         return 0
         ;;
@@ -270,23 +387,39 @@ DOC
     warn "未识别到支持的包管理器，自动安装功能将不可用。"
   fi
 
-  local header_width=80
+  local header_width=100
   _hr "$header_width"
-  printf "%-18s %-10s %s\n" "组件" "状态" "说明"
+  printf "%-18s %-6s %-10s %s\n" "组件" "分类" "状态" "说明"
   _hr "$header_width"
 
   local missing_required=()
   local missing_optional=()
   local missing_client=()
+  local skipped_optional=()
+  local skipped_client=()
   local install_candidates=()
+
+  doctor_category_label(){
+    case "$1" in
+      required) echo "核心" ;;
+      optional) echo "可选" ;;
+      client)   echo "客户端" ;;
+      *)        echo "$1" ;;
+    esac
+  }
+
+  doctor_print(){
+    local label="$1" tier="$2" status_text="$3" detail="$4"
+    printf "%-18s %-6s %-10s %s\n" "$label" "$(doctor_category_label "$tier")" "$status_text" "$detail"
+  }
 
   doctor_check(){
     local tool="$1" label="$2" tier="$3"
     local path
     if path="$(command -v "$tool" 2>/dev/null)"; then
-      printf "%-18s %-10b %s\n" "$label" "${C_GREEN}OK${C_RESET}" "$path"
+      doctor_print "$label" "$tier" "${C_GREEN}OK${C_RESET}" "$path"
     else
-      printf "%-18s %-10b %s\n" "$label" "${C_RED}缺失${C_RESET}" "未找到可执行文件：$tool"
+      doctor_print "$label" "$tier" "${C_RED}缺失${C_RESET}" "未找到可执行文件：$tool"
       case "$tier" in
         required) missing_required+=("$tool") ;;
         optional) missing_optional+=("$tool") ;;
@@ -302,15 +435,41 @@ DOC
     fi
   }
 
+  doctor_skip(){
+    local label="$1" tier="$2" reason="$3"
+    doctor_print "$label" "$tier" "${C_DIM}SKIP${C_RESET}" "$reason"
+    case "$tier" in
+      optional) skipped_optional+=("$label") ;;
+      client)   skipped_client+=("$label") ;;
+    esac
+  }
+
   doctor_check jq            "jq"            required
   doctor_check curl          "curl"          required
   doctor_check systemctl     "systemctl"     required
-  doctor_check qrencode      "qrencode"      optional
+
+  if [ "$include_qrencode" -eq 1 ]; then
+    doctor_check qrencode    "qrencode"      optional
+  else
+    doctor_skip "qrencode" optional "已跳过（--without-qrcode）"
+  fi
+
   doctor_check nc            "nc"            optional
-  doctor_check xclip         "xclip"         optional
-  doctor_check wl-paste      "wl-paste"      optional
+
+  if [ "$include_clipboard" -eq 1 ]; then
+    doctor_check xclip       "xclip"         optional
+    doctor_check wl-paste    "wl-paste"      optional
+  else
+    doctor_skip "xclip" optional "已跳过（--without-clipboard）"
+    doctor_skip "wl-paste" optional "已跳过（--without-clipboard）"
+  fi
+
   doctor_check sslocal       "shadowsocks-rust" client
-  doctor_check ss-local      "shadowsocks-libev" client
+  if [ "$include_libev" -eq 1 ]; then
+    doctor_check ss-local    "shadowsocks-libev" client
+  else
+    doctor_skip "ss-local" client "已跳过（--without-libev）"
+  fi
 
   _hr "$header_width"
 
@@ -338,6 +497,13 @@ DOC
     warn "可选工具缺失：${missing_optional[*]}（部分功能将受限）。"
   else
     ok "可选工具齐全。"
+  fi
+
+  if [ "${#skipped_optional[@]}" -gt 0 ]; then
+    info "已按配置跳过可选组件检测：${skipped_optional[*]}"
+  fi
+  if [ "${#skipped_client[@]}" -gt 0 ]; then
+    info "已按配置跳过客户端检测：${skipped_client[*]}"
   fi
 
   if [ "${#install_candidates[@]}" -gt 0 ]; then
@@ -587,7 +753,11 @@ show_version(){
 
 short_usage(){
   cat <<'U'
-用法：ssctl <命令> [节点名]
+用法：ssctl [全局选项] <命令> [节点名]
+
+全局选项：
+  --config FILE        指定配置文件（默认 ~/.config/ssctl/config.json）
+  --color on|off|auto  覆盖颜色策略
 
 命令（简洁版）：
   add <name> [--from-file FILE | --server HOST --port N --method M --password P
@@ -605,20 +775,24 @@ short_usage(){
   show [name] [--qrcode]
               查看节点配置、状态或生成二维码
 
-  monitor [name] [--url URL] [--interval N] [--count M] [--no-dns] [--tail]
+  monitor [name] [--url URL] [--interval N] [--count M] [--no-dns]
+              [--ping] [--format json|text] [--tail]
               实时监控：连通性/时延/速率/成功率；可选跟随日志
-  logs [name] -f
-              跟随日志（tail -f）
+  logs [name] [--format json] [-f]
+              查看或跟随日志（支持 JSON 输出）
   latency|test  测试所有节点延迟并排序
+  metrics [--format json|prom]
+              输出节点状态指标（JSON 或 Prometheus）
   sub           管理订阅 (add, list, remove, update)
 
-  doctor [--install] [--dry-run]
-              环境体检：检测并可选自动安装依赖
+  doctor [--install] [--dry-run] [--without-clipboard] [--without-qrcode]
+         [--without-libev]
+              环境体检：检测依赖并可选自动安装
 
   clear         清理所有 ssctl 生成的内容（保留 nodes/）
   env [proxy [name] | noproxy]
               输出设置/清除代理环境变量的命令（配合 eval 使用）
-  noproxy     停止所有代理单元并切换为直连模式（提示如何清理环境变量）
+  noproxy       停止所有代理单元并切换为直连模式（提示如何清理环境变量）
   help          查看详细说明
 U
 }
@@ -648,7 +822,9 @@ monitor：
   - ssctl monitor               # 监控 current 节点，默认每 5 秒测一次，带 DNS
   - ssctl monitor mynode --interval 2 --count 30
   - ssctl monitor --no-dns --url http://1.1.1.1 --tail
+  - ssctl monitor --format json --ping          # 输出 JSON，并附加 ping 数据
   - 支持选项在前或在后；-i 等价 --interval，-n 等价 --count，-f/-t 等价 --tail
+    --format 支持 text/json，--ping 额外执行系统 ping（若可用）
     指标含义：
       OK/FAIL          是否连通（curl 返回码 & HTTP 状态）
       RTTms            time_total（ms）
@@ -657,10 +833,18 @@ monitor：
       SPEED(B/s)       speed_download（字节/秒）
     “--no-dns” 用 --socks5 + 1.1.1.1 仅测链路，不测域名解析
 
+metrics：
+  - ssctl metrics                 # 输出 JSON 指标
+  - ssctl metrics --format prom   # 输出 Prometheus 格式指标
+  - 指标涵盖：节点数量、活动状态、端口、systemd unit 等
+
 doctor：
   - ssctl doctor                    # 仅做检测与报告
   - ssctl doctor --install          # 自动安装缺失依赖（需 sudo/root）
   - ssctl doctor --install --dry-run # 预览将执行的安装命令
+  - ssctl doctor --without-clipboard # 跳过 xclip/wl-paste
+  - ssctl doctor --without-qrcode    # 跳过 qrencode
+  - ssctl doctor --without-libev     # 跳过 libev 客户端
   - 检查内容包含：jq/curl 等核心命令、Shadowsocks 客户端、systemd --user 可用性等
 
 env：
@@ -683,6 +867,15 @@ JSON 关键字段：
   plugin, plugin_opts（可选）
   engine（可选：auto|rust|libev，默认 auto）
 
+配置与扩展：
+  - 配置文件：~/.config/ssctl/config.json（可通过 --config 或 SSCTL_CONFIG 指定）
+    示例字段：color、monitor.interval、monitor.url、doctor.include_clipboard 等。
+  - 插件目录：
+      • 内置：$LIB_DIR/functions.d/*.sh（随脚本安装）
+      • 用户：~/.config/ssctl/functions.d/*.sh
+      • 环境变量：SSCTL_PLUGIN_DIRS=dir1:dir2 指定额外目录
+    插件脚本会在运行前自动载入，可定义新的 cmd_xxx 子命令。
+
 排错：
   - 自动补全: source ssctl-completion.sh
   - 环境体检：ssctl doctor
@@ -696,11 +889,64 @@ echo "版本：${APP_VERSION}"
 
 
 main(){
-  local cmd="${1:-}"; shift || true
+  local global_config_path="" color_override=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --config)
+        [ $# -ge 2 ] || die "--config 需要一个路径参数"
+        global_config_path="$2"
+        shift 2
+        continue
+        ;;
+      --config=*)
+        global_config_path="${1#*=}"
+        shift
+        continue
+        ;;
+      --color)
+        [ $# -ge 2 ] || die "--color 需要指定 on/off/auto"
+        color_override="$2"
+        shift 2
+        continue
+        ;;
+      --color=*)
+        color_override="${1#*=}"
+        shift
+        continue
+        ;;
+      --no-color)
+        color_override="off"
+        shift
+        continue
+        ;;
+      -v|--version)
+        show_version; exit 0 ;;
+      -h|--help|help)
+        long_help; exit 0 ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  load_config "$global_config_path"
+  if [ -n "$color_override" ]; then
+    apply_config_color "$color_override"
+  else
+    apply_config_color "$CONFIG_COLOR_MODE"
+  fi
+
+  load_plugins
+
+  local cmd="${1:-}";
+  shift || true
   case "${cmd:-}" in
-    -v|--version) show_version; exit 0 ;;
     "" ) short_usage ;;
-    help|-h|--help) long_help ;;
     add)     cmd_add "$@" ;;
     remove|rm)  cmd_remove "$@" ;;
     start)   cmd_start "${1:-}" ;;
@@ -713,7 +959,7 @@ main(){
     latency|test) cmd_latency "$@" ;;
     sub) cmd_sub "$@" ;;
     doctor) cmd_doctor "$@" ;;
-
+    metrics) cmd_metrics "$@" ;;
 
     probe|check)
       self_check
@@ -722,6 +968,8 @@ main(){
     clear)   cmd_clear ;;
     env)     cmd_env "$@" ;;
     noproxy) cmd_noproxy ;;
+    -v|--version) show_version ;;
+    -h|--help|help) long_help ;;
     *)
       warn "未知命令：$cmd"; short_usage; exit 1 ;;
   esac
@@ -743,6 +991,58 @@ resolve_lib_dir(){
     return 0
   fi
   return 1
+}
+
+expand_path(){
+  case "$1" in
+    "") return 1 ;;
+    ~) printf '%s\n' "$HOME" ;;
+    ~/*) printf '%s/%s\n' "$HOME" "${1#~/}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+load_plugins(){
+  local unique_dirs=()
+  local seen=""
+  add_dir(){
+    local raw="$1" resolved
+    [ -n "$raw" ] || return 0
+    resolved=$(expand_path "$raw" 2>/dev/null || true)
+    [ -n "$resolved" ] || return 0
+    [ -d "$resolved" ] || return 0
+    case " $seen " in
+      *" $resolved "*) return 0 ;;
+    esac
+    seen="$seen $resolved"
+    unique_dirs+=("$resolved")
+  }
+
+  for dir in "${LIB_DIR}/functions.d"; do
+    add_dir "$dir"
+  done
+  add_dir "${HOME}/.config/ssctl/functions.d"
+
+  if [ -n "${SSCTL_PLUGIN_DIRS:-}" ]; then
+    local IFS=':'
+    for dir in $SSCTL_PLUGIN_DIRS; do
+      add_dir "$dir"
+    done
+  fi
+
+  if [ "${#CONFIG_PLUGIN_PATHS[@]}" -gt 0 ]; then
+    for dir in "${CONFIG_PLUGIN_PATHS[@]}"; do
+      add_dir "$dir"
+    done
+  fi
+
+  for dir in "${unique_dirs[@]}"; do
+    for file in "$dir"/*.sh; do
+      [ -e "$file" ] || continue
+      # shellcheck disable=SC1090
+      . "$file"
+    done
+  done
 }
 
 LIB_DIR="$(resolve_lib_dir)" || die "未找到 ssctl functions 目录。请确认已安装 functions/*.sh（可设置 SSCTL_LIB_DIR 指向安装路径）。"

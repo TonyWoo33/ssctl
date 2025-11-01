@@ -8,6 +8,7 @@
 - **节点生命周期管理**：新增/导入节点、自动生成 systemd user 单元、单实例启动与切换、防冲突策略。
 - **运维工具链**：实时监控链路（`ssctl monitor`）、延迟测试、日志查看与高亮、二维码导出、环境变量快速注入。
 - **订阅同步**：解析 `ss://` 链接（含插件参数）并写入本地配置目录，支持批量更新。
+- **集中配置+插件**：支持 `~/.config/ssctl/config.json` 调整默认 URL/颜色/体检策略；可在 `functions.d/` 挂载自定义子命令。
 - **命令行体验**：内建颜色输出、Bash/Zsh 补全脚本、友好的错误提示。
 
 ## 安装与升级
@@ -64,16 +65,58 @@ ssctl monitor hk --interval 3 --tail
 
 节点配置位于 `~/.config/shadowsocks-rust/nodes/<name>.json`，可直接编辑后使用 `ssctl show` 检查。
 
+## 配置
+
+- **默认路径**：`~/.config/ssctl/config.json`（可通过环境变量 `SSCTL_CONFIG` 或 `--config` 覆盖）。
+- **示例配置**：
+
+  ```json
+  {
+    "color": "auto",
+    "monitor": {
+      "url": "https://www.google.com/generate_204",
+      "no_dns_url": "http://1.1.1.1",
+      "interval": 5
+    },
+    "doctor": {
+      "include_clipboard": true,
+      "include_qrencode": true,
+      "include_libev": true
+    },
+    "plugins": {
+      "paths": ["~/.config/ssctl/functions.d"]
+    }
+  }
+  ```
+
+- 支持字段：
+  - `color`: `auto`/`on`/`off` 控制颜色输出。
+  - `monitor`: 控制默认探测 URL、无 DNS 模式 URL、间隔。
+  - `probe` / `latency`: 设置默认的探测 URL。
+  - `doctor.*`: 决定是否检测剪贴板、二维码、libev 客户端。
+  - `plugins.paths`: 追加插件脚本目录（见下节）。
+
+## 插件扩展
+
+- **加载顺序**：
+  1. 安装目录下的 `${SSCTL_LIB_DIR}/functions.d/*.sh`
+  2. 用户目录 `~/.config/ssctl/functions.d/*.sh`
+  3. `SSCTL_PLUGIN_DIRS`（使用 `:` 分隔多个路径）
+  4. 配置文件中 `plugins.paths`
+- 每个插件脚本 `source` 后可定义形如 `cmd_xyz()` 的子命令，或扩展工具函数。
+- 适用于定制探测逻辑（如替换 `curl`）、集成第三方 API、批量运维脚本等。
+
 ## 常用命令
 
 | 命令 | 说明 |
 | --- | --- |
-| `ssctl doctor [--install] [--dry-run]` | 检测依赖、systemd 环境，可选自动安装缺失包 |
+| `ssctl doctor [--install] [--without-clipboard] [...]` | 检测依赖、systemd 环境，可选自动安装或跳过部分可选依赖 |
 | `ssctl add <name> ...` | 新建或导入节点；支持 `--from-file`、`--from-clipboard`、手动参数 |
 | `ssctl start [name]` | 单实例启动节点，自动更新 `current.json` 并执行连通性探测 |
 | `ssctl stop [name]` | 停止节点并移除对应 systemd unit |
 | `ssctl list` | 表格列出所有节点及运行状态 |
-| `ssctl monitor [name] [...]` | 实时监控链路，支持 DNS/offline 模式和日志跟随 |
+| `ssctl monitor [name] [--format json] [--ping]` | 实时监控链路，可输出 JSON 并附带 ping 指标 |
+| `ssctl metrics [--format prom]` | 导出节点指标，支持 JSON / Prometheus |
 | `ssctl sub update [alias]` | 从订阅地址批量导入 `ss://` 链接（含插件参数解析） |
 | `ssctl env proxy [name]` | 输出代理环境变量导出命令，配合 `eval` 使用 |
 

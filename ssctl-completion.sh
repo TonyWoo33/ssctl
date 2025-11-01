@@ -29,18 +29,61 @@ _ssctl_completions(){
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    cmd="${COMP_WORDS[1]}"
 
-    local commands="add remove start stop switch list show monitor logs clear env noproxy latency test sub doctor probe check help"
+    local commands="add remove start stop switch list show monitor logs clear env noproxy latency test sub doctor probe check help metrics"
+    local global_opts="--config --color --no-color --help --version"
 
-    if [ "$COMP_CWORD" -eq 1 ]; then
-        COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+    if [ "$prev" = "--config" ]; then
+        COMPREPLY=($(compgen -f -- "$cur"))
+        return
+    fi
+
+    if [ "$prev" = "--color" ]; then
+        COMPREPLY=($(compgen -W "auto on off" -- "$cur"))
+        return
+    fi
+
+    cmd=""
+    local i=1
+    while [ $i -lt ${#COMP_WORDS[@]} ]; do
+        local word="${COMP_WORDS[$i]}"
+        case "$word" in
+            --config)
+                i=$((i+2))
+                continue
+                ;;
+            --color)
+                i=$((i+2))
+                continue
+                ;;
+            --color=*|--no-color|-h|--help|-v|--version)
+                i=$((i+1))
+                continue
+                ;;
+            --)
+                if [ $i -lt $(( ${#COMP_WORDS[@]} - 1 )) ]; then
+                    cmd="${COMP_WORDS[$((i+1))]}"
+                fi
+                break
+                ;;
+            -* )
+                i=$((i+1))
+                continue
+                ;;
+            *)
+                cmd="$word"
+                break
+                ;;
+        esac
+    done
+
+    if [ -z "$cmd" ]; then
+        COMPREPLY=($(compgen -W "$commands $global_opts" -- "$cur"))
         return
     fi
 
     case "$cmd" in
         add)
-            # no completion for options yet
             ;;
         remove|start|stop|switch|show|monitor|logs|probe|check)
             COMPREPLY=($(compgen -W "$(__ssctl_node_candidates)" -- "$cur"))
@@ -68,10 +111,24 @@ _ssctl_completions(){
             esac
             ;;
         doctor)
-            COMPREPLY=($(compgen -W "--install --dry-run -i -h --help" -- "$cur"))
+            COMPREPLY=($(compgen -W "--install --dry-run --without-clipboard --with-clipboard --without-qrcode --with-qrcode --without-libev --with-libev -i -h --help" -- "$cur"))
+            return
+            ;;
+        monitor)
+            COMPREPLY=($(compgen -W "--url --interval --count --tail --no-dns --ping --format --json" -- "$cur"))
+            return
+            ;;
+        logs)
+            COMPREPLY=($(compgen -W "--format --json -f --follow -n --lines" -- "$cur"))
+            return
+            ;;
+        metrics)
+            COMPREPLY=($(compgen -W "--format -h --help" -- "$cur"))
             return
             ;;
     esac
+
+    COMPREPLY=()
 }
 
 if [ -n "${BASH_VERSION:-}" ]; then

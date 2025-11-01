@@ -2,7 +2,7 @@
 
 cmd_latency(){
   self_check
-  local url="${1:-https://www.google.com/generate_204}"
+  local url="${1:-$DEFAULT_LATENCY_URL}"
   info "正在测试所有节点的延迟... URL: ${url}"
 
   local W_NAME=22 W_LATENCY=10

@@ -2,7 +2,7 @@
 
 probe(){
   local name; name="$(resolve_name "${1:-}")"
-  local url="${2:-https://www.google.com/generate_204}"
+  local url="${2:-$DEFAULT_PROBE_URL}"
 
   local laddr lport unit
   laddr="$(json_get "$name" local_address)"; [ -n "$laddr" ] || laddr="$DEFAULT_LOCAL_ADDR"

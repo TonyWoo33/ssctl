@@ -3,7 +3,7 @@
 cmd_logs(){
   self_check
   local follow=0 lines=200 name=""
-  local lines_set=0
+  local lines_set=0 output_format="text"
   local positional=()
 
   while [ $# -gt 0 ]; do
@@ -17,6 +17,19 @@ cmd_logs(){
         lines="$2"
         lines_set=1
         shift 2
+        ;;
+      --json)
+        output_format="json"
+        shift
+        ;;
+      --format)
+        [ $# -ge 2 ] || die "用法：ssctl logs [--format json|text] [-n N] [-f] [name]"
+        output_format="$2"
+        shift 2
+        ;;
+      --format=*)
+        output_format="${1#*=}"
+        shift
         ;;
       --)
         shift
@@ -41,6 +54,11 @@ cmd_logs(){
     lines=50
   fi
 
+  case "$output_format" in
+    text|json) ;;
+    *) die "未知输出格式：$output_format（支持 text|json）" ;;
+  esac
+
   if [ -n "$name" ]; then
     name="$(resolve_name "$name")"
   else
@@ -51,11 +69,20 @@ cmd_logs(){
 
   if [ "$follow" -eq 1 ]; then
     # 直接跟随输出（不做着色，以免干扰实时刷新；如需保留可复用之前的 awk 上色）
-    exec journalctl --user -u "$unit" -n "$lines" -f --no-pager
+    if [ "$output_format" = "json" ]; then
+      exec journalctl --user -u "$unit" -n "$lines" -f --no-pager -o json
+    else
+      exec journalctl --user -u "$unit" -n "$lines" -f --no-pager
+    fi
   fi
 
   # 原有逻辑（静态高亮查看）
   local log
+  if [ "$output_format" = "json" ]; then
+    journalctl --user -u "$unit" -n "$lines" -e --no-pager -o json
+    return 0
+  fi
+
   log="$(journalctl --user -u "$unit" -n "$lines" -e --no-pager 2>&1 || true)"
   if [ "$USE_COLOR" -ne 1 ] || [ ! -t 1 ]; then
     printf "%s\n" "$log"
