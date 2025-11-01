@@ -6,16 +6,17 @@ emit_env_proxy(){  # 输出 export 语句，供 eval 使用；$1 = 节点名(可
   laddr="$(json_get "$name" local_address)"; [ -n "$laddr" ] || laddr="$DEFAULT_LOCAL_ADDR"
   lport="$(json_get "$name" local_port)";   [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
 
+  local proxy_url="socks5h://${laddr}:${lport}"
   cat <<EOF
 # Use 'eval "\$(ssctl env proxy${1:+ }$1)"' to apply
-export ALL_PROXY="socks5h://${laddr}:${lport}"
-export all_proxy="$ALL_PROXY"
-export http_proxy="$ALL_PROXY"
-export https_proxy="$ALL_PROXY"
-export ftp_proxy="$ALL_PROXY"
-export HTTP_PROXY="$ALL_PROXY"
-export HTTPS_PROXY="$ALL_PROXY"
-export FTP_PROXY="$ALL_PROXY"
+export ALL_PROXY="${proxy_url}"
+export all_proxy="${proxy_url}"
+export http_proxy="${proxy_url}"
+export https_proxy="${proxy_url}"
+export ftp_proxy="${proxy_url}"
+export HTTP_PROXY="${proxy_url}"
+export HTTPS_PROXY="${proxy_url}"
+export FTP_PROXY="${proxy_url}"
 # 如果有内网/直连域名，请把它们加入 NO_PROXY/no_proxy（英文逗号分隔）
 # 例：export NO_PROXY="localhost,127.0.0.1,.corp.local"
 EOF

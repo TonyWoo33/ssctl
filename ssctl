@@ -727,6 +727,7 @@ main(){
   esac
 }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+BIN_DIR="$SCRIPT_DIR"
 
 resolve_lib_dir(){
   if [ -n "${SSCTL_LIB_DIR:-}" ] && [ -d "${SSCTL_LIB_DIR}/functions" ]; then
@@ -745,6 +746,8 @@ resolve_lib_dir(){
 }
 
 LIB_DIR="$(resolve_lib_dir)" || die "未找到 ssctl functions 目录。请确认已安装 functions/*.sh（可设置 SSCTL_LIB_DIR 指向安装路径）。"
+export SSCTL_LIB_DIR="$LIB_DIR"
+SCRIPT_DIR="$LIB_DIR"
 
 # Load all function scripts
 for f in "${LIB_DIR}"/functions/*.sh; do
