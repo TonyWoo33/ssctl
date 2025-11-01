@@ -42,18 +42,37 @@ cmd_add(){
     fi
     
     if [[ "$clipboard_content" == ss://* ]]; then
-        # Almost the same logic as in sub.sh
-        local encoded_part tag
-        encoded_part=$(echo "$clipboard_content" | sed -e 's/ss:\/\/\([^#]*\).*/\1/')
-        tag=$(echo "$clipboard_content" | sed -e 's/.*#\(.*\)/\1/')
-        tag=$(url_decode "$tag")
+        local link_body="${clipboard_content#ss://}"
+        local without_fragment="${link_body%%#*}"
+        local query=""
+        if [[ "$without_fragment" == *"\?"* ]]; then
+            query="${without_fragment#*\?}"
+        fi
+        local core_part="${without_fragment%%\?*}"
+
         local decoded_cred
-        decoded_cred=$(urlsafe_b64_decode "$encoded_part")
-        local ss_method ss_password ss_server ss_port
-        ss_method=$(echo "$decoded_cred" | cut -d: -f1)
-        ss_password=$(echo "$decoded_cred" | cut -d: -f2 | cut -d@ -f1)
-        ss_server=$(echo "$decoded_cred" | cut -d@ -f2 | cut -d: -f1)
-        ss_port=$(echo "$decoded_cred" | cut -d@ -f2 | cut -d: -f2)
+        decoded_cred="$(urlsafe_b64_decode "$core_part" || true)"
+        if [[ "$decoded_cred" != *@* ]]; then
+            decoded_cred="$core_part"
+        fi
+        decoded_cred="${decoded_cred//$'\r'/}"
+
+        local ss_method ss_password ss_server ss_port host_port rest
+        ss_method="${decoded_cred%%:*}"
+        rest="${decoded_cred#*:}"
+        ss_password="${rest%%@*}"
+        host_port="${rest#*@}"
+        if [[ "$host_port" == \[*\]*:* ]]; then
+            ss_server="${host_port%%]*}"
+            ss_server="${ss_server#[}"
+            ss_port="${host_port##*]:}"
+        else
+            ss_server="${host_port%%:*}"
+            ss_port="${host_port##*:}"
+        fi
+
+        local plugin="" plugin_opts=""
+        parse_plugin_params "$query" plugin plugin_opts
 
         jq -n \
           --arg name "$name" \
@@ -64,6 +83,8 @@ cmd_add(){
           --arg laddr "$DEFAULT_LOCAL_ADDR" \
           --argjson lport "${lport:-$DEFAULT_LOCAL_PORT}" \
           --arg engine "auto" \
+          --arg plugin "$plugin" \
+          --arg plugin_opts "$plugin_opts" \
           '{
              name:$name,
              server:$server,
@@ -73,7 +94,9 @@ cmd_add(){
              local_address:$laddr,
              local_port:$lport,
              engine:$engine
-           }' >"$dst" || warn "写入失败：$dst"
+           }
+           + (if ($plugin|length)>0 then {plugin:$plugin} else {} end)
+           + (if ($plugin_opts|length)>0 then {plugin_opts:$plugin_opts} else {} end)' >"$dst" || warn "写入失败：$dst"
         ok "已从剪贴板导入节点：$name"
     else
         # Assume it is a JSON config
