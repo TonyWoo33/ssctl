@@ -15,8 +15,8 @@
 1. 克隆仓库（或下载脚本）：
 
    ```bash
-   git clone <repo-url>
-   cd ss-node-main
+   git clone https://github.com/TonyWoo33/ssctl.git
+   cd ssctl-main
    ```
 
 2. 将 `ssctl` 脚本加入 `PATH`，例如：
