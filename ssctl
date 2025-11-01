@@ -767,7 +767,7 @@ short_usage(){
   latency|test  测试所有节点延迟并排序
   metrics [--format json|prom]
               输出节点状态指标（JSON 或 Prometheus）
-  sub           管理订阅 (add, list, remove, update)
+  sub           管理订阅 (add, list, remove, update [--force])
 
   doctor [--install] [--dry-run] [--without-clipboard] [--without-qrcode]
          [--without-libev]
