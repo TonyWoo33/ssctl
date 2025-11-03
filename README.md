@@ -6,7 +6,7 @@
 
 - **环境体检与自动安装**：`ssctl doctor` 检测核心依赖（jq、curl、systemctl 等）并可选自动通过系统包管理器安装缺失组件。
 - **节点生命周期管理**：新增/导入节点、自动生成 systemd user 单元、单实例启动与切换、防冲突策略。
-- **运维工具链**：实时监控链路（`ssctl monitor`）、延迟测试、日志查看与高亮、二维码导出、环境变量快速注入。
+- **运维工具链**：实时监控链路（`ssctl monitor`）、上下行速率统计（`ssctl stats`）、延迟测试、日志查看与高亮、二维码导出、环境变量快速注入。
 - **订阅同步**：解析 `ss://` 链接（含插件参数）并写入本地配置目录，支持批量更新。
 - **集中配置+插件**：支持 `~/.config/ssctl/config.json` 调整默认 URL/颜色/体检策略；可在 `functions.d/` 挂载自定义子命令。
 - **命令行体验**：内建颜色输出、Bash/Zsh 补全脚本、友好的错误提示。
@@ -142,6 +142,7 @@ ssctl monitor hk --interval 3 --tail
 | `ssctl stop [name]` | 停止节点并移除对应 systemd unit |
 | `ssctl list` | 表格列出所有节点及运行状态 |
 | `ssctl monitor [name] [--format json] [--ping]` | 实时监控链路，可输出 JSON 并附带 ping 指标 |
+| `ssctl stats [name|all] [--aggregate] [--format json]` | 采集节点实时 TX/RX/TOTAL(B/s) 与累计量，可按节点或总计输出 |
 | `ssctl metrics [--format prom]` | 导出节点指标，支持 JSON / Prometheus |
 | `ssctl sub update [alias]` | 从订阅地址批量导入 `ss://` 链接（含插件参数解析） |
 | `ssctl env proxy [name]` | 输出代理环境变量导出命令，配合 `eval` 使用 |

@@ -762,6 +762,8 @@ short_usage(){
   monitor [name] [--url URL] [--interval N] [--count M] [--no-dns]
               [--ping] [--format json|text] [--tail]
               实时监控：连通性/时延/速率/成功率；可选跟随日志
+  stats [name|all] [--interval S] [--count N] [--aggregate] [--format text|json]
+              采集实时上下行速率与累计量，可按节点或汇总输出
   logs [name] [--format json] [-f]
               查看或跟随日志（支持 JSON 输出）
   latency|test  测试所有节点延迟并排序
@@ -803,7 +805,7 @@ remove：
   - 加 -y/--yes 无需确认
   - 如 current 指向被删节点，会自动清空指向。
   
-monitor：
+  monitor：
   - ssctl monitor               # 监控 current 节点，默认每 5 秒测一次，带 DNS
   - ssctl monitor mynode --interval 2 --count 30
   - ssctl monitor --no-dns --url http://1.1.1.1 --tail
@@ -817,6 +819,12 @@ monitor：
       CONN             time_connect（ms）
       SPEED(B/s)       speed_download（字节/秒）
     “--no-dns” 用 --socks5 + 1.1.1.1 仅测链路，不测域名解析
+
+stats：
+  - ssctl stats               # 采集当前节点速率，默认每 2 秒更新
+  - ssctl stats all --aggregate --format json --interval 5
+  - 输出字段：TX/RX/TOTAL(B/s)、累计 TX/RX、PID、warming 提示
+  - 首次采样会提示 warming up，第二次起计算速率
 
 metrics：
   - ssctl metrics                 # 输出 JSON 指标
@@ -940,6 +948,7 @@ main(){
     list|ls) cmd_list ;;
     show|status) cmd_show "${1:-}" ;;
     monitor) cmd_monitor "$@" ;;
+    stats)   cmd_stats "$@" ;;
     logs|journal) cmd_logs "$@" ;;
     latency|test) cmd_latency "$@" ;;
     sub) cmd_sub "$@" ;;
