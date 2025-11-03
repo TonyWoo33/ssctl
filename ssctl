@@ -969,7 +969,10 @@ main(){
     show|status) cmd_show "${1:-}" ;;
     monitor) cmd_monitor "$@" ;;
     stats)   cmd_stats "$@" ;;
-    logs|journal) cmd_logs "$@" ;;
+    log|logs)
+      cmd_log "$@"
+      ;;
+    journal) cmd_logs "$@" ;;
     latency|test) cmd_latency "$@" ;;
     sub) cmd_sub "$@" ;;
     doctor) cmd_doctor "$@" ;;
@@ -1065,6 +1068,7 @@ SCRIPT_DIR="$LIB_DIR"
 
 # Load all function scripts
 for f in "${LIB_DIR}"/functions/*.sh; do
+  [ -f "$f" ] || continue
   # shellcheck disable=SC1090
   . "$f"
 done

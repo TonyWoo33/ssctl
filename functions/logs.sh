@@ -215,6 +215,18 @@ cmd_logs(){
         format="json"; shift ;;
       --raw)
         raw=1; shift ;;
+      -h|--help)
+        cat <<'DOC'
+用法：ssctl log [name] [--follow] [--lines N] [--filter key=value]
+                [--since TS] [--until TS] [--format text|json] [--raw]
+说明：
+  - 支持 target/ip/port/method/protocol/regex 过滤。
+  - --follow/-f  跟随输出；默认读取最近 200 行，可用 --lines 调整。
+  - --raw        直接输出原始 journald/文件日志，不做解析。
+  - --format json 输出结构化字段，包含 protocol/target/source 等信息。
+DOC
+        return 0
+        ;;
       --)
         shift
         [ $# -gt 0 ] && name="$1"
@@ -321,4 +333,9 @@ cmd_logs(){
 
   unset LOG_FILTER_TARGET LOG_FILTER_IP LOG_FILTER_PORT LOG_FILTER_METHOD LOG_FILTER_PROTOCOL LOG_FILTER_REGEX
   return $rc
+}
+
+# Wrapper for log alias.
+cmd_log(){
+  cmd_logs "$@"
 }
