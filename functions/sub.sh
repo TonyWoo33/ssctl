@@ -44,8 +44,37 @@ cmd_sub(){
       ok "已移除订阅: $alias"
       ;;
     update)
-      local target_alias="${1:-all}"
-      info "正在更新订阅... (目标: ${target_alias})"
+      local force=0
+      local target_alias="all"
+
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --force|-f)
+            force=1
+            shift
+            ;;
+          --)
+            shift
+            if [ $# -gt 0 ]; then
+              [ "$target_alias" = "all" ] || die "重复指定目标: $1"
+              target_alias="$1"
+              shift
+            fi
+            [ $# -eq 0 ] || die "未知多余参数: $1 (用法: ssctl sub update [--force] [别名|all])"
+            break
+            ;;
+          -*)
+            die "未知参数: $1 (用法: ssctl sub update [--force] [别名|all])"
+            ;;
+          *)
+            [ "$target_alias" = "all" ] || die "重复指定目标: $1"
+            target_alias="$1"
+            shift
+            ;;
+        esac
+      done
+
+      info "正在更新订阅... (目标: ${target_alias}; 覆盖模式: $([ "$force" -eq 1 ] && echo "强制" || echo "保留现有"))"
 
       local subs_to_update
       if [ "$target_alias" = "all" ]; then
@@ -122,15 +151,17 @@ cmd_sub(){
             fi
             local node_name="${alias}_${node_suffix}"
 
-            info "正在添加节点: $node_name"
+            info "正在添加/更新节点: $node_name"
             # Directly use the logic from cmd_add to create the JSON
-            local dst; dst="$(node_json_path "$node_name")"
-            if [ -e "$dst" ]; then
-                warn "节点已存在，跳过: $node_name"
-                continue
-            fi
+            local dst dst_dir tmp_file
+            dst="$(node_json_path "$node_name")"
+            dst_dir="$(dirname "$dst")"
+            tmp_file="$(mktemp "${dst_dir}/.subnode.XXXXXX" 2>/dev/null)" || {
+              warn "无法创建临时文件，跳过: $node_name"
+              continue
+            }
 
-            jq -n \
+            if ! jq -n \
               --arg name "$node_name" \
               --arg server "$server" \
               --argjson server_port "$port" \
@@ -153,8 +184,40 @@ cmd_sub(){
                }
                + (if ($plugin|length)>0 then {plugin:$plugin} else {} end)
                + (if ($plugin_opts|length)>0 then {plugin_opts:$plugin_opts} else {} end)
-              ' >"$dst" || warn "写入失败：$dst"
-            chmod 600 "$dst"
+              ' >"$tmp_file"; then
+              warn "写入失败：$dst"
+              rm -f "$tmp_file"
+              continue
+            fi
+
+            chmod 600 "$tmp_file"
+
+            if [ -e "$dst" ]; then
+              if [ "$force" -ne 1 ]; then
+                warn "节点已存在，使用 --force 可覆盖: $node_name"
+                rm -f "$tmp_file"
+                continue
+              fi
+
+              local backup
+              backup="${dst}.bak.$(date +%Y%m%d%H%M%S)"
+              if cp "$dst" "$backup"; then
+                info "已备份旧节点到: $backup"
+              else
+                warn "备份失败，跳过覆盖: $node_name"
+                rm -f "$tmp_file"
+                continue
+              fi
+            fi
+
+            if mv "$tmp_file" "$dst"; then
+              chmod 600 "$dst"
+              ok "节点已同步: $node_name"
+            else
+              warn "无法替换节点：$node_name"
+              rm -f "$tmp_file"
+              continue
+            fi
           fi
         done
         ok "订阅处理完毕: $alias"
