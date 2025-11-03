@@ -123,7 +123,7 @@ _ssctl_completions(){
             return
             ;;
         logs)
-            COMPREPLY=($(compgen -W "--format --json -f --follow -n --lines" -- "$cur"))
+            COMPREPLY=($(compgen -W "--format --json -f --follow -n --lines --since --until --filter --raw" -- "$cur"))
             return
             ;;
         metrics)

@@ -142,6 +142,7 @@ ssctl monitor hk --interval 3 --tail
 | `ssctl stop [name]` | 停止节点并移除对应 systemd unit |
 | `ssctl list` | 表格列出所有节点及运行状态 |
 | `ssctl monitor [name] [--format json] [--ping]` | 实时监控链路，可输出 JSON 并附带 ping 指标 |
+| `ssctl log [name] [--follow] [--filter key=value] [--format json]` | 解析 CONNECT/UDP 目标，支持 target/ip/port/method/protocol/regex 过滤与 JSON 输出 |
 | `ssctl stats [name|all] [--aggregate] [--format json]` | 采集节点实时 TX/RX/TOTAL(B/s) 与累计量，可按节点或总计输出 |
 | `ssctl metrics [--format prom]` | 导出节点指标，支持 JSON / Prometheus |
 | `ssctl sub update [alias]` | 从订阅地址批量导入 `ss://` 链接（含插件参数解析） |

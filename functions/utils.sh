@@ -254,3 +254,74 @@ collect_proc_bytes(){
             ;;
     esac
 }
+
+ssctl_default_log_path(){
+    local name="$1"
+    printf '%s/logs/%s.log\n' "$CONF_DIR" "$name"
+}
+
+resolve_log_source(){
+    local name="$1" unit fallback
+    if [ -z "$name" ]; then
+        return 1
+    fi
+    unit="$(unit_name_for "$name")"
+    if command -v journalctl >/dev/null 2>&1; then
+        if journalctl --user -u "$unit" -n 1 --no-pager >/dev/null 2>&1 || journalctl --user -u "$unit" -n 0 --no-pager >/dev/null 2>&1; then
+            printf 'journal:%s\n' "$unit"
+            return 0
+        fi
+    fi
+    fallback="${SSCTL_LOG_PATH:-$(ssctl_default_log_path "$name")}"
+    printf 'file:%s\n' "$fallback"
+}
+
+parse_ssr_line(){
+    local message="$1"
+    local protocol="" action="" target_host="" target_port="" src_host="" src_port="" method=""
+
+    if [[ "$message" =~ ^TCP[[:space:]]+CONNECT[[:space:]]+([^[:space:]]+):([0-9]+)[[:space:]]+from[[:space:]]+([^[:space:]]+):([0-9]+) ]]; then
+        protocol="tcp"
+        action="connect"
+        target_host="${BASH_REMATCH[1]}"
+        target_port="${BASH_REMATCH[2]}"
+        src_host="${BASH_REMATCH[3]}"
+        src_port="${BASH_REMATCH[4]}"
+    elif [[ "$message" =~ ^UDP[[:space:]]+ASSOCIATE[[:space:]]+([^[:space:]]+):([0-9]+) ]]; then
+        protocol="udp"
+        action="associate"
+        target_host="${BASH_REMATCH[1]}"
+        target_port="${BASH_REMATCH[2]}"
+        if [[ "$message" =~ from[[:space:]]+([^[:space:]]+):([0-9]+) ]]; then
+            src_host="${BASH_REMATCH[1]}"
+            src_port="${BASH_REMATCH[2]}"
+        fi
+    elif [[ "$message" =~ ^TCP[[:space:]]+FORWARD[[:space:]]+([^[:space:]]+):([0-9]+) ]]; then
+        protocol="tcp"
+        action="forward"
+        target_host="${BASH_REMATCH[1]}"
+        target_port="${BASH_REMATCH[2]}"
+    fi
+
+    if [[ "$message" =~ method[=:][[:space:]]*([A-Za-z0-9_-]+) ]]; then
+        method="${BASH_REMATCH[1]}"
+    fi
+
+    jq -n \
+        --arg protocol "$protocol" \
+        --arg action "$action" \
+        --arg target_host "$target_host" \
+        --arg target_port "$target_port" \
+        --arg source_host "$src_host" \
+        --arg source_port "$src_port" \
+        --arg method "$method" \
+        '{
+            protocol: (if ($protocol|length) > 0 then $protocol else null end),
+            action: (if ($action|length) > 0 then $action else null end),
+            target_host: (if ($target_host|length) > 0 then $target_host else null end),
+            target_port: (if ($target_port|length) > 0 then ($target_port|tonumber) else null end),
+            source_host: (if ($source_host|length) > 0 then $source_host else null end),
+            source_port: (if ($source_port|length) > 0 then ($source_port|tonumber) else null end),
+            method: (if ($method|length) > 0 then $method else null end)
+        }'
+}
