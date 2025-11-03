@@ -87,6 +87,7 @@ cmd_monitor(){
   local name="" url="" interval="$DEFAULT_MONITOR_INTERVAL" count=0 tail=0 nodns=0
   local output_format="text" do_ping=0 show_logs=0 show_speed=0 stats_interval="" log_limit=5
   local filter_args=()
+  local show_help=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -106,6 +107,7 @@ cmd_monitor(){
       --format)     output_format="$2"; shift 2 ;;
       --format=*)   output_format="${1#*=}"; shift ;;
       --json)       output_format="json"; shift ;;
+      -h|--help)    show_help=1; shift ;;
       --)           shift; break ;;
       -* )
         warn "忽略未知参数：$1"; shift ;;
@@ -113,6 +115,21 @@ cmd_monitor(){
         if [ -z "$name" ]; then name="$1"; shift; else break; fi ;;
     esac
   done
+
+  if [ "$show_help" -eq 1 ]; then
+    cat <<'DOC'
+用法：ssctl monitor [name] [--interval S] [--count N] [--log] [--speed]
+                  [--stats-interval S] [--tail] [--filter key=value]
+                  [--format text|json] [--ping] [--no-dns]
+说明：
+  --log            捕获 CONNECT/UDP 目标，可配合 target/ip/port/method/protocol/regex 过滤。
+  --speed          输出 Shadowsocks 进程的 TX/RX/TOTAL(B/s) 与累计量；可用 --stats-interval 单独控制采样周期。
+  --tail           循环刷新输出；默认每 interval 秒采样。
+  --format json    输出结构化字段，包含日志数组与速率细节。
+  --no-dns         使用 --socks5 与裸 IP 仅测链路连通性。
+DOC
+    return 0
+  fi
 
   if [ -z "$name" ] && [ $# -gt 0 ]; then
     name="$1"; shift
@@ -163,9 +180,13 @@ cmd_monitor(){
   server="$(json_get "$name" server)"
   unit="$(unit_name_for "$name")"
 
-  if ! systemctl --user is-active --quiet "$unit"; then
-    warn "服务未启动：$unit"
-    warn "可先运行：ssctl start ${name}"
+  if ! systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+    if [ "$output_format" = "json" ]; then
+      jq -n --arg name "$name" --arg unit "$unit" '{error:"unit_inactive",name:$name,unit:$unit}'
+    else
+      warn "服务未启动：$unit"
+      warn "可先运行：ssctl start ${name}"
+    fi
     return 1
   fi
 
@@ -224,14 +245,19 @@ cmd_monitor(){
   fi
 
   if [ "$output_format" = "text" ]; then
-    printf '%s\n' "MONITOR name=${name} url=${url} interval=${interval}s speed=$([ "$show_speed" -eq 1 ] && echo on || echo off) log=$([ "$show_logs" -eq 1 ] && echo on || echo off) dns=$([ "$nodns" -eq 1 ] && echo off || echo on) format=${output_format}"
+    local speed_flag="off" log_flag="off" dns_flag="on"
+    [ "$show_speed" -eq 1 ] && speed_flag="on"
+    [ "$show_logs" -eq 1 ] && log_flag="on"
+    [ "$nodns" -eq 1 ] && dns_flag="off"
+    printf 'MONITOR name=%s url=%s interval=%ss speed=%s log=%s dns=%s format=%s\n' \
+      "$name" "$url" "$interval" "$speed_flag" "$log_flag" "$dns_flag" "$output_format"
     _hr "$header_width"
     if [ "$do_ping" -eq 1 ] && [ "$show_speed" -eq 1 ]; then
-      printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-8s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
-        "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "PINGms" "CURL(B/s)" "TX(B/s)" "RX(B/s)" "TX_TOTAL" "RX_TOTAL"
+      printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-8s  %-9s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
+        "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "PINGms" "CURL(B/s)" "TX(B/s)" "RX(B/s)" "TOTAL(B/s)" "TX_TOTAL" "RX_TOTAL"
     elif [ "$show_speed" -eq 1 ]; then
-      printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
-        "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "CURL(B/s)" "TX(B/s)" "RX(B/s)" "TX_TOTAL" "RX_TOTAL"
+      printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
+        "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "CURL(B/s)" "TX(B/s)" "RX(B/s)" "TOTAL(B/s)" "TX_TOTAL" "RX_TOTAL"
     elif [ "$do_ping" -eq 1 ]; then
       printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-11s  %-9s\n" "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "PINGms" "SPEED(B/s)"
     else
@@ -311,37 +337,65 @@ cmd_monitor(){
     if [ "$output_format" = "json" ]; then
       local stats_json='null'
       if [ "$show_speed" -eq 1 ] && [ -n "$last_stats_entry" ]; then
+        local stats_valid_num=0
+        [ "$stats_valid" = "1" ] && stats_valid_num=1
+        local stats_warming_num=0
+        [ "$stats_warming" = "1" ] && stats_warming_num=1
+        local stats_tx_rate_num="$(monitor_number_or_default "$stats_tx_rate" "0")"
+        local stats_rx_rate_num="$(monitor_number_or_default "$stats_rx_rate" "0")"
+        local stats_total_rate_num="$(monitor_number_or_default "$stats_total_rate" "0")"
+        local stats_tx_total_num="$(monitor_number_or_default "$stats_tx_total" "0")"
+        local stats_rx_total_num="$(monitor_number_or_default "$stats_rx_total" "0")"
         stats_json="$(jq -n \
-          --argjson valid "$stats_valid" \
-          --argjson tx_rate "${stats_tx_rate:-0}" \
-          --argjson rx_rate "${stats_rx_rate:-0}" \
-          --argjson total_rate "${stats_total_rate:-0}" \
-          --argjson tx_total "${stats_tx_total:-0}" \
-          --argjson rx_total "${stats_rx_total:-0}" \
-          --arg warming "$stats_warming" \
+          --argjson valid "$stats_valid_num" \
+          --argjson tx_rate "$stats_tx_rate_num" \
+          --argjson rx_rate "$stats_rx_rate_num" \
+          --argjson total_rate "$stats_total_rate_num" \
+          --argjson tx_total "$stats_tx_total_num" \
+          --argjson rx_total "$stats_rx_total_num" \
+          --argjson warming "$stats_warming_num" \
           --arg note "$stats_note" \
-          '{valid:($valid==1),tx_bytes_per_second:$tx_rate,rx_bytes_per_second:$rx_rate,total_bytes_per_second:$total_rate,tx_total_bytes:$tx_total,rx_total_bytes:$rx_total,warming_up:($warming==1),note:($note|length>0?$note:null)}')"
+          '{valid:($valid==1),tx_bytes_per_second:$tx_rate,rx_bytes_per_second:$rx_rate,total_bytes_per_second:$total_rate,tx_total_bytes:$tx_total,rx_total_bytes:$rx_total,warming_up:($warming==1)} | if ($note|length)>0 then . + {note:$note} else . end')"
+      fi
+
+      local timestamp_iso="$(date --iso-8601=seconds)"
+      local ok_flag=0
+      [ "$printf_ok" = "OK" ] && ok_flag=1
+      local http_code_num=0
+      if [[ "$code_val" =~ ^[0-9]+$ ]]; then
+        http_code_num=$((10#$code_val))
+      fi
+      local rtt_ms_num="$(monitor_number_or_default "$rtt_ms" "0")"
+      local ttfb_ms_num="$(monitor_number_or_default "$ttfb_ms" "0")"
+      local conn_ms_num="$(monitor_number_or_default "$conn_ms" "0")"
+      local curl_rate_num="$(monitor_number_or_default "$speed_val" "0")"
+      local ping_ms_json="null"
+      if [ -n "$ping_ms_value" ]; then
+        ping_ms_json="$(monitor_number_or_default "$ping_ms_value" "0")"
       fi
 
       jq -n \
-        --arg time "$(date --iso-8601=seconds)" \
+        --arg time "$timestamp_iso" \
         --arg name "$name" \
         --arg url "$url" \
         --arg status "$printf_ok" \
         --arg laddr "$laddr" \
-        --argjson ok "$( [ "$printf_ok" = "OK" ] && echo 1 || echo 0 )" \
-        --argjson http_code "$code_val" \
-        --argjson latency_ms "$rtt_ms" \
-        --argjson ttfb_ms "$ttfb_ms" \
-        --argjson connect_ms "$conn_ms" \
-        --argjson speed_bps "$speed_val" \
-        --argjson ping_ms "$([[ -n "$ping_ms_value" ]] && echo "$ping_ms_value" || echo null)" \
+        --argjson ok_flag "$ok_flag" \
+        --argjson http_code "$http_code_num" \
+        --argjson latency_ms "$rtt_ms_num" \
+        --argjson ttfb_ms "$ttfb_ms_num" \
+        --argjson connect_ms "$conn_ms_num" \
+        --argjson curl_bps "$curl_rate_num" \
+        --argjson ping_ms "$ping_ms_json" \
         --argjson stats "$stats_json" \
         --argjson logs "$logs_json" \
-        '{time:$time,name:$name,url:$url,status:$status,ok:$ok,http_code:$http_code,latency_ms:$latency_ms,ttfb_ms:$ttfb_ms,connect_ms:$connect_ms,speed_bytes_per_s:$speed_bps,local_address:$laddr} + (if $ping_ms == null then {} else {ping_ms:$ping_ms} end) + (if $stats == null then {} else {stats:$stats} end) + (if ($logs|length)>0 then {logs:$logs} else {} end)'
+        '{time:$time,name:$name,url:$url,status:$status,ok:($ok_flag==1),http_code:$http_code,latency_ms:$latency_ms,ttfb_ms:$ttfb_ms,connect_ms:$connect_ms,curl_bytes_per_s:$curl_bps,local_address:$laddr}
+         | (if $ping_ms == null then . else . + {ping_ms:$ping_ms} end)
+         | (if $stats == null then . else . + {stats:$stats} end)
+         | (if ($logs|length)>0 then . + {logs:$logs} else . end)'
     else
       if [ "$do_ping" -eq 1 ] && [ "$show_speed" -eq 1 ]; then
-        printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-8s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
+        printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-8s  %-9s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
           "$(date '+%F %T')" \
           "$printf_ok" \
           "$rtt_ms" \
@@ -352,10 +406,11 @@ cmd_monitor(){
           "$speed_val" \
           "$(format_rate "$stats_tx_rate")" \
           "$(format_rate "$stats_rx_rate")" \
+          "$(format_rate "$stats_total_rate")" \
           "$(human_bytes "$stats_tx_total")" \
           "$(human_bytes "$stats_rx_total")"
       elif [ "$show_speed" -eq 1 ]; then
-        printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
+        printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
           "$(date '+%F %T')" \
           "$printf_ok" \
           "$rtt_ms" \
@@ -365,6 +420,7 @@ cmd_monitor(){
           "$speed_val" \
           "$(format_rate "$stats_tx_rate")" \
           "$(format_rate "$stats_rx_rate")" \
+          "$(format_rate "$stats_total_rate")" \
           "$(human_bytes "$stats_tx_total")" \
           "$(human_bytes "$stats_rx_total")"
       elif [ "$do_ping" -eq 1 ]; then
