@@ -30,7 +30,7 @@ _ssctl_completions(){
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local commands="add remove start stop switch list show monitor logs clear env noproxy latency test sub doctor probe check help metrics"
+    local commands="add remove start stop switch list show monitor stats logs clear env noproxy latency test sub doctor probe check help metrics"
     local global_opts="--config --color --no-color --help --version"
 
     if [ "$prev" = "--config" ]; then
@@ -85,7 +85,7 @@ _ssctl_completions(){
     case "$cmd" in
         add)
             ;;
-        remove|start|stop|switch|show|monitor|logs|probe|check)
+        remove|start|stop|switch|show|monitor|stats|logs|probe|check)
             COMPREPLY=($(compgen -W "$(__ssctl_node_candidates)" -- "$cur"))
             return
             ;;
@@ -115,11 +115,15 @@ _ssctl_completions(){
             return
             ;;
         monitor)
-            COMPREPLY=($(compgen -W "--url --interval --count --tail --no-dns --ping --format --json" -- "$cur"))
+            COMPREPLY=($(compgen -W "--url --interval --count --tail --no-dns --ping --format --json --log --speed --stats-interval --filter" -- "$cur"))
+            return
+            ;;
+        stats)
+            COMPREPLY=($(compgen -W "--interval --count --aggregate --format --filter" -- "$cur"))
             return
             ;;
         logs)
-            COMPREPLY=($(compgen -W "--format --json -f --follow -n --lines" -- "$cur"))
+            COMPREPLY=($(compgen -W "--format --json -f --follow -n --lines --since --until --filter --raw" -- "$cur"))
             return
             ;;
         metrics)

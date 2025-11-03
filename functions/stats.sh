@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+
+stats_cache_dir(){
+  local dir="${SSCTL_STATS_CACHE_DIR:-${HOME}/.cache/ssctl/stats}" current_umask
+  current_umask="$(umask)"
+  umask 077
+  mkdir -p "$dir" 2>/dev/null || true
+  umask "$current_umask"
+  printf '%s\n' "$dir"
+}
+
+stats_read_cache(){
+  local node="$1" cache_dir="$2" file
+  file="$cache_dir/${node}.cache"
+  if [ -r "$file" ]; then
+    read -r ts tx rx <"$file" || true
+    printf '%s %s %s\n' "${ts:-0}" "${tx:-0}" "${rx:-0}"
+    return 0
+  fi
+  printf '0 0 0\n'
+}
+
+stats_write_cache(){
+  local node="$1" cache_dir="$2" ts="$3" tx="$4" rx="$5"
+  local file="$cache_dir/${node}.cache"
+  printf '%s %s %s\n' "$ts" "$tx" "$rx" >"$file"
+}
+
+stats_collect_node(){
+  local node="$1" epoch="$2" cache_dir="$3"
+  local unit lport pid metrics rc note="" valid=0 warming=0
+  local tx_bytes=0 rx_bytes=0 tx_rate=0 rx_rate=0 total_rate=0 rtt="-"
+
+  unit="$(unit_name_for "$node")"
+  lport="$(json_get "$node" local_port)"; [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
+
+  pid="$(ssctl_unit_pid "$node" "$unit" 2>/dev/null || true)"
+  if [ -z "$pid" ]; then
+    note="unit inactive或PID不可用"
+    echo "$node|0|0|0|0|0|0|$rtt|${pid:-0}|0|$note"
+    return 0
+  fi
+
+  local cache_prev prev_ts prev_tx prev_rx delta_tx delta_rx delta_t
+  cache_prev="$(stats_read_cache "$node" "$cache_dir")"
+  read -r prev_ts prev_tx prev_rx <<<"$cache_prev"
+
+  metrics="$(collect_proc_bytes "$pid" "$lport" 2>/dev/null)"
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    if [ $rc -eq 3 ]; then
+      note="当前无活跃连接"
+      tx_bytes="$prev_tx"
+      rx_bytes="$prev_rx"
+    else
+      case $rc in
+        2) note="缺少 ss/nettop 支持" ;;
+        4) note="解析网络统计失败" ;;
+        99) note="当前平台不支持采样" ;;
+        *) note="采样失败 (code=$rc)" ;;
+      esac
+      echo "$node|0|0|0|0|0|0|$rtt|$pid|0|$note"
+      return 0
+    fi
+  fi
+
+  if [ $rc -eq 0 ]; then
+    read -r tx_bytes rx_bytes <<<"$metrics"
+  fi
+  tx_bytes="${tx_bytes:-0}"
+  rx_bytes="${rx_bytes:-0}"
+
+  stats_write_cache "$node" "$cache_dir" "$epoch" "$tx_bytes" "$rx_bytes"
+
+  if [ "$prev_ts" -gt 0 ] && [ "$epoch" -gt "$prev_ts" ] && [ "$tx_bytes" -ge "$prev_tx" ] && [ "$rx_bytes" -ge "$prev_rx" ]; then
+    delta_tx=$(( tx_bytes - prev_tx ))
+    delta_rx=$(( rx_bytes - prev_rx ))
+    delta_t=$(( epoch - prev_ts ))
+    [ "$delta_t" -gt 0 ] || delta_t=1
+    tx_rate=$(( delta_tx / delta_t ))
+    rx_rate=$(( delta_rx / delta_t ))
+  else
+    warming=1
+  fi
+
+  total_rate=$(( tx_rate + rx_rate ))
+  valid=1
+  echo "$node|$valid|$tx_rate|$rx_rate|$total_rate|$tx_bytes|$rx_bytes|$rtt|$pid|$warming|$note"
+}
+
+cmd_stats(){
+  self_check
+  ssctl_read_config
+
+  local interval=2 count=0 aggregate=0 format="text"
+  local positional=() filters=()
+  local filter_node="" filter_regex=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --interval)
+        interval="$2"; shift 2 ;;
+      --interval=*)
+        interval="${1#*=}"; shift ;;
+      --count)
+        count="$2"; shift 2 ;;
+      --count=*)
+        count="${1#*=}"; shift ;;
+      --aggregate)
+        aggregate=1; shift ;;
+      --format)
+        format="$2"; shift 2 ;;
+      --format=*)
+        format="${1#*=}"; shift ;;
+      --filter)
+        filters+=("$2"); shift 2 ;;
+      --filter=*)
+        filters+=("${1#*=}"); shift ;;
+      -h|--help)
+        cat <<'DOC'
+用法：ssctl stats [name|all] [--interval S] [--count N] [--aggregate] [--format text|json]
+说明：
+  - 采集 Shadowsocks 节点的 TX/RX/TOTAL 字节率与累计量。
+  - 默认输出 text 表格，配合 --format json 输出结构化数据。
+  - --aggregate 会追加 TOTAL 行。
+  - --filter 支持 name/node=xxx 或 regex=PATTERN。
+DOC
+        return 0
+        ;;
+      --)
+        shift
+        positional+=("$@")
+        break
+        ;;
+      -* )
+        die "未知参数：$1"
+        ;;
+      *)
+        positional+=("$1"); shift ;;
+    esac
+  done
+
+  for item in "${filters[@]}"; do
+    case "$item" in
+      name=*|node=*) filter_node="${item#*=}" ;;
+      regex=*) filter_regex="${item#*=}" ;;
+      *) warn "忽略未知 filter：$item" ;;
+    esac
+  done
+
+  case "$format" in
+    text|json) ;;
+    *) die "未知输出格式：$format" ;;
+  esac
+
+  local target="" nodes=()
+  if [ ${#positional[@]} -gt 0 ]; then
+    target="${positional[0]}"
+  fi
+
+  if [ -z "$target" ]; then
+    target="$(resolve_name "")"
+  fi
+
+  if [ "$target" = "all" ]; then
+    while read -r node; do
+      [ -n "$node" ] || continue
+      nodes+=("$node")
+    done < <(list_nodes)
+  else
+    nodes+=("$(resolve_name "$target")")
+  fi
+
+  if [ ${#nodes[@]} -eq 0 ]; then
+    die "未找到节点"
+  fi
+
+  local filtered=()
+  local node
+  for node in "${nodes[@]}"; do
+    if [ -n "$filter_node" ] && [[ "$node" != *"$filter_node"* ]]; then
+      continue
+    fi
+    if [ -n "$filter_regex" ] && ! printf '%s\n' "$node" | grep -Eq "$filter_regex"; then
+      continue
+    fi
+    filtered+=("$node")
+  done
+
+  nodes=("${filtered[@]}")
+  if [ ${#nodes[@]} -eq 0 ]; then
+    die "filter 结果为空"
+  fi
+
+  if [ "${SSCTL_MONITOR_STATS_ENABLED:-true}" = "false" ]; then
+    warn "配置禁用 stats 采集（SSCTL_MONITOR_STATS_ENABLED=false），仍继续执行。"
+  fi
+
+  local cache_dir
+  cache_dir="$(stats_cache_dir)"
+
+  local header_printed=0
+  local iteration=0
+  while :; do
+    iteration=$((iteration + 1))
+    local timestamp epoch
+    timestamp="$(date '+%F %T')"
+    epoch="$(date +%s)"
+
+    local rows=() row aggregate_tx_rate=0 aggregate_rx_rate=0 aggregate_total_rate=0
+    local aggregate_tx_total=0 aggregate_rx_total=0 warming_any=0 valid_any=0
+    local node_jsons=()
+
+    for node in "${nodes[@]}"; do
+      row="$(stats_collect_node "$node" "$epoch" "$cache_dir")"
+      rows+=("$row")
+      IFS='|' read -r _ valid tx_rate rx_rate total_rate tx_total rx_total rtt pid warming note <<<"$row"
+      if [ "$valid" = "1" ]; then
+        aggregate_tx_rate=$(( aggregate_tx_rate + tx_rate ))
+        aggregate_rx_rate=$(( aggregate_rx_rate + rx_rate ))
+        aggregate_total_rate=$(( aggregate_total_rate + total_rate ))
+        aggregate_tx_total=$(( aggregate_tx_total + tx_total ))
+        aggregate_rx_total=$(( aggregate_rx_total + rx_total ))
+        valid_any=1
+      fi
+      if [ "$warming" = "1" ]; then
+        warming_any=1
+      fi
+
+      if [ "$format" = "json" ]; then
+        node_jsons+=("$(jq -n \
+          --arg name "$node" \
+          --arg pid "$pid" \
+          --arg note "$note" \
+          --arg rtt "$rtt" \
+          --argjson tx_rate "${tx_rate:-0}" \
+          --argjson rx_rate "${rx_rate:-0}" \
+          --argjson total_rate "${total_rate:-0}" \
+          --argjson tx_total "${tx_total:-0}" \
+          --argjson rx_total "${rx_total:-0}" \
+          --argjson valid "${valid:-0}" \
+          --argjson warming "${warming:-0}" \
+          '{name:$name,pid:($pid|tonumber?),tx_bytes_per_second:$tx_rate,rx_bytes_per_second:$rx_rate,total_bytes_per_second:$total_rate,tx_total_bytes:$tx_total,rx_total_bytes:$rx_total,rtt_ms:(($rtt=="-")?null:($rtt|tonumber)),valid:($valid==1),warming_up:($warming==1),note:($note|length>0?$note:null)}' )")
+      fi
+    done
+
+    if [ "$format" = "text" ]; then
+      if [ $header_printed -eq 0 ]; then
+        printf '%-19s  %-12s  %10s  %10s  %11s  %12s  %12s  %8s\n' \
+          "TIME" "NODE" "TX(B/s)" "RX(B/s)" "TOTAL(B/s)" "TX_TOTAL" "RX_TOTAL" "PID"
+        _hr 100
+        header_printed=1
+      fi
+      for row in "${rows[@]}"; do
+        IFS='|' read -r name valid tx_rate rx_rate total_rate tx_total rx_total rtt pid warming note <<<"$row"
+        printf '%-19s  %-12s  %10s  %10s  %11s  %12s  %12s  %8s\n' \
+          "$timestamp" "$name" "$(format_rate "$tx_rate")" "$(format_rate "$rx_rate")" \
+          "$(format_rate "$total_rate")" "$(human_bytes "$tx_total")" "$(human_bytes "$rx_total")" "${pid:-0}"
+        if [ -n "$note" ]; then
+          printf '    note: %s\n' "$note"
+        fi
+      done
+      if [ $aggregate -eq 1 ]; then
+        printf '%-19s  %-12s  %10s  %10s  %11s  %12s  %12s  %8s\n' \
+          "$timestamp" "TOTAL" "$(format_rate "$aggregate_tx_rate")" "$(format_rate "$aggregate_rx_rate")" \
+          "$(format_rate "$aggregate_total_rate")" "$(human_bytes "$aggregate_tx_total")" \
+          "$(human_bytes "$aggregate_rx_total")" "-"
+      fi
+      if [ $warming_any -eq 1 ]; then
+        printf '    warming up: 需要至少两次采样才能计算速率。\n'
+      fi
+      if [ "$count" -eq 0 ] || [ $iteration -lt "$count" ]; then
+        printf '\n'
+      fi
+    else
+      local nodes_payload aggregate_obj="null"
+      if [ ${#node_jsons[@]} -gt 0 ]; then
+        nodes_payload="$(printf '%s\n' "${node_jsons[@]}" | jq -s '.')"
+      else
+        nodes_payload='[]'
+      fi
+      if [ $aggregate -eq 1 ]; then
+        aggregate_obj="$(jq -n \
+          --arg name "TOTAL" \
+          --argjson tx_rate "$aggregate_tx_rate" \
+          --argjson rx_rate "$aggregate_rx_rate" \
+          --argjson total_rate "$aggregate_total_rate" \
+          --argjson tx_total "$aggregate_tx_total" \
+          --argjson rx_total "$aggregate_rx_total" \
+          '{name:$name,aggregate:true,tx_bytes_per_second:$tx_rate,rx_bytes_per_second:$rx_rate,total_bytes_per_second:$total_rate,tx_total_bytes:$tx_total,rx_total_bytes:$rx_total}')"
+      fi
+      jq -n \
+        --arg time "$timestamp" \
+        --argjson interval "$interval" \
+        --argjson aggregate "$aggregate_obj" \
+        --argjson nodes "$nodes_payload" \
+        '{time:$time,interval_seconds:$interval,nodes:$nodes} + (if $aggregate == null then {} else {aggregate:$aggregate} end)'
+    fi
+
+    if [ "$count" -gt 0 ] && [ $iteration -ge "$count" ]; then
+      break
+    fi
+    sleep "$interval"
+  done
+}
