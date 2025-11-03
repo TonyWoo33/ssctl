@@ -638,6 +638,7 @@ stop_all_units(){
 
 write_unit(){
   local name="$1"
+  ssctl_read_config
   local json_path; json_path="$(node_json_path "$name")"
   [ -r "$json_path" ] || die "找不到节点 JSON：$json_path"
   local unit; unit="$(unit_name_for "$name")"
@@ -684,6 +685,12 @@ write_unit(){
     chmod 600 "$run_cfg"
   fi
 
+  local log_level="${SSCTL_LOG_LEVEL:-info}"
+  local log_path="$(ssctl_default_log_path "$name")"
+  mkdir -p "$(dirname "$log_path")"
+  touch "$log_path"
+  chmod 600 "$log_path" 2>/dev/null || true
+
   cat > "${SYS_DIR}/${unit}" <<EOF
 [Unit]
 Description=Shadowsocks local client (${name}:${lp}, engine=${engine})
@@ -695,6 +702,9 @@ Type=simple
 ExecStart="${exec_path}" -c "${run_cfg}"
 Restart=always
 RestartSec=2s
+Environment=SSCTL_LOG_LEVEL=${log_level}
+Environment=SSCTL_LOG_PATH=${log_path}
+Environment=RUST_LOG=${log_level}
 
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -760,8 +770,9 @@ short_usage(){
               查看节点配置、状态或生成二维码
 
   monitor [name] [--url URL] [--interval N] [--count M] [--no-dns]
-              [--ping] [--format json|text] [--tail]
-              实时监控：连通性/时延/速率/成功率；可选跟随日志
+              [--ping] [--format json|text] [--tail] [--log]
+              [--speed] [--stats-interval S] [--filter key=value]
+              实时监控：连通性/时延/速率/成功率，可选输出日志与速率
   stats [name|all] [--interval S] [--count N] [--aggregate] [--format text|json]
               采集实时上下行速率与累计量，可按节点或汇总输出
   logs [name] [--follow] [--filter key=value] [--format text|json]
@@ -813,6 +824,9 @@ remove：
   - ssctl monitor --format json --ping          # 输出 JSON，并附加 ping 数据
   - 支持选项在前或在后；-i 等价 --interval，-n 等价 --count，-f/-t 等价 --tail
     --format 支持 text/json，--ping 额外执行系统 ping（若可用）
+    --log 解析并输出最近 CONNECT/UDP 目标，可配合 --filter target=xxx
+    --speed 输出 TX/RX/TOTAL(B/s) 与累计量；--stats-interval 单独控制采样周期
+    --filter 支持 target/ip/port/method/protocol/regex（用于日志筛选）
     指标含义：
       OK/FAIL          是否连通（curl 返回码 & HTTP 状态）
       RTTms            time_total（ms）

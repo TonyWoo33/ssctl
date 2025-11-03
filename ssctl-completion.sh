@@ -115,7 +115,7 @@ _ssctl_completions(){
             return
             ;;
         monitor)
-            COMPREPLY=($(compgen -W "--url --interval --count --tail --no-dns --ping --format --json" -- "$cur"))
+            COMPREPLY=($(compgen -W "--url --interval --count --tail --no-dns --ping --format --json --log --speed --stats-interval --filter" -- "$cur"))
             return
             ;;
         stats)
