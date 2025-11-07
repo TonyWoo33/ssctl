@@ -30,7 +30,7 @@ _ssctl_completions(){
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local commands="add remove start stop switch list show monitor stats logs clear env noproxy latency test sub doctor probe check help metrics"
+    local commands="add remove start stop switch list show monitor stats logs clear env noproxy latency test sub doctor probe check journal help metrics"
     local global_opts="--config --color --no-color --help --version"
 
     if [ "$prev" = "--config" ]; then
@@ -85,7 +85,7 @@ _ssctl_completions(){
     case "$cmd" in
         add)
             ;;
-        remove|start|stop|switch|show|monitor|stats|logs|probe|check)
+        remove|start|stop|switch|show|monitor|stats|logs|probe|check|journal)
             COMPREPLY=($(compgen -W "$(__ssctl_node_candidates)" -- "$cur"))
             return
             ;;
@@ -119,7 +119,7 @@ _ssctl_completions(){
             return
             ;;
         stats)
-            COMPREPLY=($(compgen -W "--interval --count --aggregate --format --filter" -- "$cur"))
+            COMPREPLY=($(compgen -W "--interval --count --aggregate --format --filter --watch" -- "$cur"))
             return
             ;;
         logs)

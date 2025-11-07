@@ -14,6 +14,8 @@
 - **环境体检与自动安装**：`ssctl doctor` 检测核心依赖（jq、curl、systemctl 等）并可选自动通过系统包管理器安装缺失组件。
 - **节点生命周期管理**：新增/导入节点、自动生成 systemd user 单元、单实例启动与切换、防冲突策略。
 - **运维工具链**：实时监控链路（`ssctl monitor` / `ssctl stats --watch`）、上下行速率统计、连通性体检（`probe`）、延迟测试（`latency`）、日志查看与高亮、二维码导出、环境变量快速注入。
+- **批量采样性能**：`latency` / `monitor` / `stats` 通过一次性读取节点 JSON 与 systemd 状态，避免在循环中反复调用 `jq` / `systemctl`，几十个节点也能保持流畅。
+- **鲁棒探测链路**：所有出网 `curl` 默认携带 `--connect-timeout 5 --max-time 10`，`probe` / `sub` 等命令在弱网环境下不会无限挂起。
 - **订阅同步**：解析 `ss://` 链接（含插件参数）并写入本地配置目录，支持批量更新。
 - **集中配置+插件**：支持 `~/.config/ssctl/config.json` 调整默认 URL/颜色/体检策略；可在 `functions.d/` 挂载自定义子命令。
 - **命令行体验**：内建颜色输出、Bash/Zsh 补全脚本、友好的错误提示。
@@ -32,7 +34,7 @@
    ```bash
    install -d ~/.local/bin ~/.local/share/ssctl
    install -m 755 ssctl ~/.local/bin/ssctl
-   cp -r functions ~/.local/share/ssctl/
+   cp -r functions lib ~/.local/share/ssctl/
    install -m 644 ssctl-completion.sh ~/.local/share/ssctl/ssctl-completion.sh
    ```
 
@@ -183,10 +185,13 @@ ssctl latency --json | jq
 | `ssctl monitor [name] [--interval S] [--tail] [--log] [--speed] [--json]` | 实时监控链路质量；`--speed` 依赖 `ss`/`nettop`，`--ping` 需 GNU ping，输出 NDJSON/表格并可追加日志 |
 | `ssctl log [name] [--follow] [--filter key=value] [--format json]` | 解析 CONNECT/UDP 目标，支持 target/ip/port/method/protocol/regex 过滤与 JSON 输出 |
 | `ssctl stats [name\|all] [--aggregate] [--format json] [--watch]` | 采集节点实时 TX/RX/TOTAL(B/s) 与累计量，依赖 `ss`/`nettop`；`--watch` 等价于 `monitor --speed` |
-| `ssctl probe [name] [--url URL] [--json]` | 快速体检：校验端口监听、SOCKS5 HTTP 连通性、链路探测（仅链路/带 DNS），支持 JSON 输出 |
+| `ssctl probe|journal [name] [--url URL] [--json]` | 快速体检：校验端口监听、SOCKS5 HTTP 连通性、链路探测（仅链路/带 DNS），支持 JSON 输出 |
 | `ssctl latency [--url URL] [--json]` | 对全部节点发起一次 TCP 握手测量，返回排序列表或 JSON 结果 |
 | `ssctl metrics [--format prom]` | 导出节点指标，支持 JSON / Prometheus |
 | `ssctl sub update [alias]` | 从订阅地址批量导入 `ss://` 链接（含插件参数解析） |
+| `ssctl journal [name]` | 查看 systemd 日志 (同 logs 命令) |
+| `ssctl clear` | 清理所有 ssctl 生成的内容（保留 nodes/） |
+| `ssctl noproxy` | 停止所有代理单元并切换为直连模式 |
 | `ssctl env proxy [name]` | 输出代理环境变量导出命令，配合 `eval` 使用 |
 
 完整参数请查看 `ssctl help`。
