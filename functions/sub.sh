@@ -25,6 +25,7 @@ cmd_sub(){
       local alias="$1" url="$2"
       [ -n "$alias" ] || die "用法: ssctl sub add <alias> <url>"
       [ -n "$url" ] || die "用法: ssctl sub add <alias> <url>"
+      require_safe_identifier "$alias" "订阅别名"
       
       if jq -e --arg alias "$alias" '.[] | select(.alias == $alias)' < "$SUB_CONF" > /dev/null; then
         die "订阅别名已存在: $alias"
@@ -40,6 +41,7 @@ cmd_sub(){
     remove)
       local alias="$1"
       [ -n "$alias" ] || die "用法: ssctl sub remove <alias>"
+      require_safe_identifier "$alias" "订阅别名"
       jq 'map(select(.alias != "'"$alias"'"))' < "$SUB_CONF" > "${SUB_CONF}.tmp" && mv "${SUB_CONF}.tmp" "$SUB_CONF"
       ok "已移除订阅: $alias"
       ;;
@@ -53,22 +55,24 @@ cmd_sub(){
             force=1
             shift
             ;;
-          --)
-            shift
-            if [ $# -gt 0 ]; then
-              [ "$target_alias" = "all" ] || die "重复指定目标: $1"
-              target_alias="$1"
-              shift
-            fi
-            [ $# -eq 0 ] || die "未知多余参数: $1 (用法: ssctl sub update [--force] [别名|all])"
-            break
-            ;;
+      --)
+        shift
+        if [ $# -gt 0 ]; then
+          [ "$target_alias" = "all" ] || die "重复指定目标: $1"
+          target_alias="$1"
+          [ "$target_alias" = "all" ] || require_safe_identifier "$target_alias" "订阅别名"
+          shift
+        fi
+        [ $# -eq 0 ] || die "未知多余参数: $1 (用法: ssctl sub update [--force] [别名|all])"
+        break
+        ;;
           -*)
             die "未知参数: $1 (用法: ssctl sub update [--force] [别名|all])"
             ;;
           *)
             [ "$target_alias" = "all" ] || die "重复指定目标: $1"
             target_alias="$1"
+            [ "$target_alias" = "all" ] || require_safe_identifier "$target_alias" "订阅别名"
             shift
             ;;
         esac
@@ -91,6 +95,10 @@ cmd_sub(){
         local alias url
         alias=$(echo "$sub_json" | jq -r .alias)
         url=$(echo "$sub_json" | jq -r .url)
+        if ! is_safe_identifier "$alias"; then
+          warn "跳过非法订阅别名：$alias"
+          continue
+        fi
 
         info "正在处理订阅: $alias"
         local encoded_list
@@ -106,50 +114,22 @@ cmd_sub(){
 
         echo "$decoded_list" | while read -r line; do
           if [[ "$line" == ss://* ]]; then
-            local link_body="${line#ss://}"
-            local fragment=""
-            if [[ "$link_body" == *"#"* ]]; then
-              fragment="${link_body#*#}"
+            local method password server port plugin plugin_opts parsed_fragment
+            if ! ssctl_parse_ss_uri "$line" method password server port plugin plugin_opts parsed_fragment; then
+              warn "解析订阅项失败，已跳过。"
+              continue
             fi
-            fragment="$(url_decode "$fragment")"
 
-            local without_fragment="${link_body%%#*}"
-            local query=""
-            if [[ "$without_fragment" == *\?* ]]; then
-              query="${without_fragment#*\?}"
+            local node_suffix_raw=""
+            if [ -n "$parsed_fragment" ]; then
+              node_suffix_raw="$(sanitize_identifier_token "$parsed_fragment")"
             fi
-            local core_part="${without_fragment%%\?*}"
-
-            local decoded_cred
-            decoded_cred="$(urlsafe_b64_decode "$core_part" || true)"
-            if [[ "$decoded_cred" != *@* ]]; then
-              decoded_cred="$core_part"
+            if [ -z "$node_suffix_raw" ]; then
+              node_suffix_raw="$(sanitize_identifier_token "${server}-${port}")"
             fi
-            decoded_cred="${decoded_cred//$'\r'/}"
-
-            local method="${decoded_cred%%:*}"
-            local rest="${decoded_cred#*:}"
-            local password_part="${rest%%@*}"
-            local host_port="${rest#*@}"
-            local server port
-            if [[ "$host_port" == \[*\]*:* ]]; then
-              server="${host_port%%]*}"
-              server="${server#[}"
-              port="${host_port##*]:}"
-            else
-              server="${host_port%%:*}"
-              port="${host_port##*:}"
-            fi
-            local password="$password_part"
-
-            local plugin="" plugin_opts=""
-            parse_plugin_params "$query" plugin plugin_opts
-
-            local node_suffix="$fragment"
-            if [ -z "$node_suffix" ]; then
-              node_suffix="${server}-${port}"
-            fi
-            local node_name="${alias}_${node_suffix}"
+            require_safe_identifier "$node_suffix_raw" "节点名片段"
+            local node_name="${alias}_${node_suffix_raw}"
+            require_safe_identifier "$node_name" "节点名"
 
             info "正在添加/更新节点: $node_name"
             # Directly use the logic from cmd_add to create the JSON
@@ -161,30 +141,7 @@ cmd_sub(){
               continue
             }
 
-            if ! jq -n \
-              --arg name "$node_name" \
-              --arg server "$server" \
-              --argjson server_port "$port" \
-              --arg method "$method" \
-              --arg password "$password" \
-              --arg laddr "$DEFAULT_LOCAL_ADDR" \
-              --argjson lport "$DEFAULT_LOCAL_PORT" \
-              --arg engine "auto" \
-              --arg plugin "$plugin" \
-              --arg plugin_opts "$plugin_opts" \
-              '{
-                 name:$name,
-                 server:$server,
-                 server_port:$server_port,
-                 method:$method,
-                 password:$password,
-                 local_address:$laddr,
-                 local_port:$lport,
-                 engine:$engine
-               }
-               + (if ($plugin|length)>0 then {plugin:$plugin} else {} end)
-               + (if ($plugin_opts|length)>0 then {plugin_opts:$plugin_opts} else {} end)
-              ' >"$tmp_file"; then
+            if ! ssctl_build_node_json "$node_name" "$server" "$port" "$method" "$password" "$DEFAULT_LOCAL_ADDR" "$DEFAULT_LOCAL_PORT" "auto" "$plugin" "$plugin_opts" >"$tmp_file"; then
               warn "写入失败：$dst"
               rm -f "$tmp_file"
               continue

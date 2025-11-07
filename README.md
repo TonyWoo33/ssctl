@@ -2,11 +2,18 @@
 
 `ssctl` 是一个面向桌面与服务器用户的 Shadowsocks 控制平面脚本，基于 user-level systemd 实现节点的增删改查、单实例启动、日志/监控、订阅管理等功能。项目以 Bash 实现，支持 shadowsocks-rust (`sslocal`) 与 shadowsocks-libev (`ss-local`) 双引擎，可快速搭建本地代理环境。
 
+## 系统要求
+
+- **操作系统**：优先支持 GNU/Linux，要求 Bash ≥ 4、GNU coreutils（`date --iso-8601`）、user-level systemd。其他平台仅做有限验证。
+- **速率采样**：`monitor --speed` 与 `ssctl stats` 依赖 Linux 的 `ss`（iproute2）或 macOS 的 `nettop`，缺失时将退化为“只看连通性”模式。
+- **探测与 ping**：`monitor --ping` 需要支持 `-W` 选项的 GNU ping（iputils/inetutils）；macOS 用户可通过 `brew install iputils` 或 `brew install inetutils` 获得兼容版本。
+- **macOS 提示**：建议安装 `coreutils`（提供 `gdate`）和 `gnu-ping`，但由于缺少 `ss`，速率采样仍不可用，仅能使用基础的节点管理与探测功能。
+
 ## 功能亮点
 
 - **环境体检与自动安装**：`ssctl doctor` 检测核心依赖（jq、curl、systemctl 等）并可选自动通过系统包管理器安装缺失组件。
 - **节点生命周期管理**：新增/导入节点、自动生成 systemd user 单元、单实例启动与切换、防冲突策略。
-- **运维工具链**：实时监控链路（`ssctl monitor`）、上下行速率统计（`ssctl stats`）、延迟测试、日志查看与高亮、二维码导出、环境变量快速注入。
+- **运维工具链**：实时监控链路（`ssctl monitor` / `ssctl stats --watch`）、上下行速率统计、连通性体检（`probe`）、延迟测试（`latency`）、日志查看与高亮、二维码导出、环境变量快速注入。
 - **订阅同步**：解析 `ss://` 链接（含插件参数）并写入本地配置目录，支持批量更新。
 - **集中配置+插件**：支持 `~/.config/ssctl/config.json` 调整默认 URL/颜色/体检策略；可在 `functions.d/` 挂载自定义子命令。
 - **命令行体验**：内建颜色输出、Bash/Zsh 补全脚本、友好的错误提示。
@@ -62,6 +69,7 @@
    ```
 
    如需先预览将执行的命令，可附加 `--dry-run`。
+   该命令会一并检测 `ss`/`nettop`、GNU ping 等可选组件，缺失时会提示哪些功能（如 `monitor --speed`）将受限。
 
 5. 在 `~/.bashrc` 或 `~/.zshrc` 中启用补全：
 
@@ -85,11 +93,29 @@ ssctl start hk
 ssctl show --qrcode
 ssctl logs -f hk
 
-# 监控链路质量
+# 监控链路质量（表格输出走 stderr）
 ssctl monitor hk --interval 3 --tail
+
+# 速率统计可与 monitor 同周期滚动
+ssctl stats --watch hk --interval 3 --json | jq
+
+# 节点体检 && 延迟探测（JSON/NDJSON 仅写入 stdout）
+ssctl probe hk --json | jq
+ssctl latency --json | jq
 ```
 
 节点配置位于 `~/.config/shadowsocks-rust/nodes/<name>.json`，可直接编辑后使用 `ssctl show` 检查。
+
+## 输出约定
+
+- **结构化数据**：所有 `--json` / `--format json` / NDJSON（如 `monitor` streaming）均只写入 `stdout`，便于直接通过 `jq`、`tee` 或日志采集器接入。
+- **文本/表格**：提示、表格、日志等人类可读内容统一写入 `stderr`，不会干扰上游管道。例如 `ssctl monitor ... >monitor.json` 将只得到 JSON 行。
+- **管道示例**：
+  ```bash
+  ssctl monitor local --count 1 --json | jq '.latency_ms'
+  ssctl stats --watch local --interval 2 --json | jq -r '.curl_bytes_per_s'
+  ssctl probe local --json --url http://127.0.0.1:8080 | jq '.http.ok'
+  ```
 
 ## 配置
 
@@ -115,6 +141,8 @@ ssctl monitor hk --interval 3 --tail
   }
   ```
 
+- 项目根目录提供了 `config.example.json`，可复制到 `~/.config/ssctl/config.json` 再按需调整（例如更换探测 URL 或关闭可选检测）。
+
 - 支持字段：
   - `color`: `auto`/`on`/`off` 控制颜色输出。
   - `monitor`: 控制默认探测 URL、无 DNS 模式 URL、间隔。
@@ -132,6 +160,17 @@ ssctl monitor hk --interval 3 --tail
 - 每个插件脚本 `source` 后可定义形如 `cmd_xyz()` 的子命令，或扩展工具函数。
 - 适用于定制探测逻辑（如替换 `curl`）、集成第三方 API、批量运维脚本等。
 
+### 环境变量
+
+| 变量 | 作用 |
+| --- | --- |
+| `SSCTL_CONFIG` / `SSCTL_CONFIG_ENV` | 覆盖主配置 JSON 以及 `config.env` 路径 |
+| `SSCTL_LIB_DIR` / `SSCTL_PLUGIN_DIRS` | 调整函数库与附加插件目录（`:` 分隔） |
+| `SSCTL_COLOR` / `NO_COLOR` / `SSCTL_UTF8` | 强制颜色开关以及是否使用 UTF-8 线条 |
+| `SSCTL_MONITOR_LOG_ENABLED` / `SSCTL_MONITOR_STATS_ENABLED` | 设为 `false` 可禁用 `monitor --log` 或 `monitor --speed` |
+| `SSCTL_STATS_CACHE_DIR` | 指定 `ssctl stats` 的缓存目录 |
+| `SSCTL_PROBE_IP_URL` / `SSCTL_PROBE_COUNTRY_URL` | 自定义 `probe` 命令查询出口 IP 与国家的接口 |
+
 ## 常用命令
 
 | 命令 | 说明 |
@@ -141,9 +180,11 @@ ssctl monitor hk --interval 3 --tail
 | `ssctl start [name]` | 单实例启动节点，自动更新 `current.json` 并执行连通性探测 |
 | `ssctl stop [name]` | 停止节点并移除对应 systemd unit |
 | `ssctl list` | 表格列出所有节点及运行状态 |
-| `ssctl monitor [name] [--log] [--speed] [--filter key=value]` | 实时监控链路，可输出 JSON、日志与 TX/RX 速率，并支持 ping/过滤 |
+| `ssctl monitor [name] [--interval S] [--tail] [--log] [--speed] [--json]` | 实时监控链路质量；`--speed` 依赖 `ss`/`nettop`，`--ping` 需 GNU ping，输出 NDJSON/表格并可追加日志 |
 | `ssctl log [name] [--follow] [--filter key=value] [--format json]` | 解析 CONNECT/UDP 目标，支持 target/ip/port/method/protocol/regex 过滤与 JSON 输出 |
-| `ssctl stats [name\|all] [--aggregate] [--format json]` | 采集节点实时 TX/RX/TOTAL(B/s) 与累计量，可按节点或总计输出 |
+| `ssctl stats [name\|all] [--aggregate] [--format json] [--watch]` | 采集节点实时 TX/RX/TOTAL(B/s) 与累计量，依赖 `ss`/`nettop`；`--watch` 等价于 `monitor --speed` |
+| `ssctl probe [name] [--url URL] [--json]` | 快速体检：校验端口监听、SOCKS5 HTTP 连通性、链路探测（仅链路/带 DNS），支持 JSON 输出 |
+| `ssctl latency [--url URL] [--json]` | 对全部节点发起一次 TCP 握手测量，返回排序列表或 JSON 结果 |
 | `ssctl metrics [--format prom]` | 导出节点指标，支持 JSON / Prometheus |
 | `ssctl sub update [alias]` | 从订阅地址批量导入 `ss://` 链接（含插件参数解析） |
 | `ssctl env proxy [name]` | 输出代理环境变量导出命令，配合 `eval` 使用 |
@@ -162,6 +203,7 @@ ssctl monitor hk --interval 3 --tail
   ```
 
 - 订阅更新时会解析 `ss://BASE64@host:port#tag?plugin=...`，自动填充 `plugin` 与 `plugin_opts` 字段。
+- `ssctl probe` 在 HTTP 测试通过后会额外访问 `ifconfig.me` 与 `ipinfo.io/country` 来展示出口 IP/国家，可通过设置 `SSCTL_PROBE_IP_URL`、`SSCTL_PROBE_COUNTRY_URL` 或修改配置文件来替换/关闭这些外部请求。
 
 ## 补全脚本
 
@@ -176,6 +218,10 @@ ssctl monitor hk --interval 3 --tail
 - 自动安装失败：使用 `ssctl doctor --install --dry-run` 查看命令，再根据输出手动安装。
 - `ssctl show --qrcode` 报错：确保安装 `qrencode`，可通过 `ssctl doctor --install` 自动补齐。
 - 订阅导入乱码：`ssctl` 在解析时会进行 URL 解码及插件参数提取，如仍异常请检查原始链接是否合规。
+
+## 测试
+
+开发者可以在仓库根目录执行 `bash tests/test-utils.sh`，用来快速验证 `ssctl_parse_ss_uri`、`ssctl_build_node_json` 等关键工具函数不会回归。CI 将在每次推送时运行相同脚本并执行 `shellcheck`。
 
 ## 许可
 

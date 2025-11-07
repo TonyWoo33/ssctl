@@ -38,7 +38,7 @@ cmd_list(){
     eng=$(echo "$node_info" | jq -r '.eng')
     unit=$(unit_name_for "$n") # unit_name_for still calls jq once, but that is acceptable for now
     
-    if echo "$running_units" | grep -q "$unit"; then
+    if printf '%s\n' "$running_units" | grep -Fxq "$unit"; then
       s="${C_GREEN}RUN${C_RESET}"
     fi
     

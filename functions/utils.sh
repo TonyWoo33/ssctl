@@ -33,7 +33,7 @@ url_encode(){
 # Usage: parse_plugin_params "query" plugin_var plugin_opts_var
 parse_plugin_params(){
     local query="$1" out_plugin="$2" out_plugin_opts="$3"
-    local plugin="" plugin_opts=""
+    local value_plugin="" value_plugin_opts=""
 
     if [ -n "$query" ]; then
         local IFS='&'
@@ -48,16 +48,16 @@ parse_plugin_params(){
             value="$(url_decode "$value")"
             case "$key" in
                 plugin)
-                    plugin="${value%%;*}"
+                    value_plugin="${value%%;*}"
                     if [[ "$value" == *";"* ]]; then
-                        plugin_opts="${value#*;}"
+                        value_plugin_opts="${value#*;}"
                     fi
                     ;;
                 plugin_opts|plugin-opts)
-                    if [ -n "$plugin_opts" ]; then
-                        plugin_opts="${plugin_opts};${value}"
+                    if [ -n "$value_plugin_opts" ]; then
+                        value_plugin_opts="${value_plugin_opts};${value}"
                     else
-                        plugin_opts="$value"
+                        value_plugin_opts="$value"
                     fi
                     ;;
             esac
@@ -65,40 +65,105 @@ parse_plugin_params(){
     fi
 
     if [ -n "$out_plugin" ]; then
-        printf -v "$out_plugin" '%s' "$plugin"
+        printf -v "$out_plugin" '%s' "$value_plugin"
     fi
     if [ -n "$out_plugin_opts" ]; then
-        printf -v "$out_plugin_opts" '%s' "$plugin_opts"
+        printf -v "$out_plugin_opts" '%s' "$value_plugin_opts"
     fi
 }
 
-# Load key=value pairs from config.env once and expose as environment variables.
-# Silently ignore malformed lines so local overrides stay safe.
-ssctl_read_config(){
-    if [ "${__SSCTL_ENV_LOADED:-0}" = "1" ]; then
-        return 0
+ssctl_parse_ss_uri(){
+    local uri="$1"
+    local out_method="$2" out_password="$3" out_server="$4" out_port="$5" out_plugin="$6" out_plugin_opts="$7" out_fragment="$8"
+    [[ "$uri" == ss://* ]] || return 1
+    local link_body="${uri#ss://}"
+    local parsed_fragment=""
+    if [[ "$link_body" == *"#"* ]]; then
+        parsed_fragment="${link_body#*#}"
     fi
-    local env_path="${SSCTL_CONFIG_ENV:-${HOME}/.config/ssctl/config.env}"
-    if [ -r "$env_path" ]; then
-        while IFS= read -r raw_line || [ -n "$raw_line" ]; do
-            local line
-            line="${raw_line%%#*}"
-            line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-            [ -n "$line" ] || continue
-            case "$line" in
-                *=*)
-                    local key="${line%%=*}"
-                    local value="${line#*=}"
-                    key="$(printf '%s' "$key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-                    value="$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-                    if [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-                        printf -v "$key" '%s' "$value"
-                    fi
-                    ;;
-            esac
-        done <"$env_path"
+    parsed_fragment="$(url_decode "$parsed_fragment")"
+
+    local without_fragment="${link_body%%#*}"
+    local query=""
+    if [[ "$without_fragment" == *\?* ]]; then
+        query="${without_fragment#*\?}"
     fi
-    __SSCTL_ENV_LOADED=1
+    local core_part="${without_fragment%%\?*}"
+
+    local decoded_cred
+    decoded_cred="$(urlsafe_b64_decode "$core_part" || true)"
+    if [[ "$decoded_cred" != *@* ]]; then
+        decoded_cred="$core_part"
+    fi
+    decoded_cred="${decoded_cred//$'\r'/}"
+
+    local ss_method ss_password host_port
+    ss_method="${decoded_cred%%:*}"
+    local rest="${decoded_cred#*:}"
+    ss_password="${rest%%@*}"
+    host_port="${rest#*@}"
+    local ss_server ss_port
+    if [[ "$host_port" == \[*\]*:* ]]; then
+        ss_server="${host_port%%]*}"
+        ss_server="${ss_server#[}"
+        ss_port="${host_port##*]:}"
+    else
+        ss_server="${host_port%%:*}"
+        ss_port="${host_port##*:}"
+    fi
+    [ -n "$ss_method" ] && [ -n "$ss_password" ] && [ -n "$ss_server" ] && [ -n "$ss_port" ] || return 1
+
+    local parsed_plugin="" parsed_plugin_opts=""
+    parse_plugin_params "$query" parsed_plugin parsed_plugin_opts
+
+    [ -n "$out_method" ] && printf -v "$out_method" '%s' "$ss_method"
+    [ -n "$out_password" ] && printf -v "$out_password" '%s' "$ss_password"
+    [ -n "$out_server" ] && printf -v "$out_server" '%s' "$ss_server"
+    [ -n "$out_port" ] && printf -v "$out_port" '%s' "$ss_port"
+    [ -n "$out_plugin" ] && printf -v "$out_plugin" '%s' "$parsed_plugin"
+    [ -n "$out_plugin_opts" ] && printf -v "$out_plugin_opts" '%s' "$parsed_plugin_opts"
+    [ -n "$out_fragment" ] && printf -v "$out_fragment" '%s' "$parsed_fragment"
+    return 0
+}
+
+ssctl_build_node_json(){
+    local name="$1" server="$2" port="$3" method="$4" password="$5" laddr="$6" lport="$7"
+    local engine="${8:-auto}" plugin="${9:-}" plugin_opts="${10:-}"
+    jq -n \
+      --arg name "$name" \
+      --arg server "$server" \
+      --argjson server_port "$port" \
+      --arg method "$method" \
+      --arg password "$password" \
+      --arg laddr "$laddr" \
+      --argjson lport "$lport" \
+      --arg engine "$engine" \
+      --arg plugin "$plugin" \
+      --arg plugin_opts "$plugin_opts" \
+      '{
+         name:$name,
+         server:$server,
+         server_port:$server_port,
+         method:$method,
+         password:$password,
+         local_address:$laddr,
+         local_port:$lport,
+         engine:$engine
+       }
+       + (if ($plugin|length)>0 then {plugin:$plugin} else {} end)
+       + (if ($plugin_opts|length)>0 then {plugin_opts:$plugin_opts} else {} end)'
+}
+
+ssctl_measure_http(){
+    local laddr="$1" lport="$2" url="$3" socks_mode="${4:-hostname}"
+    local flag="--socks5-hostname"
+    if [ "$socks_mode" = "ip" ]; then
+        flag="--socks5"
+    fi
+    curl -sS -o /dev/null -w '%{time_connect} %{time_starttransfer} %{time_total} %{speed_download} %{http_code}' \
+      --connect-timeout 6 --max-time 10 \
+      ${flag} "${laddr}:${lport}" \
+      "${url}" 2>/dev/null
 }
 
 # Retrieve the main PID for a node or unit. Uses systemd first and falls back to pgrep.

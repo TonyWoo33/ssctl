@@ -1,0 +1,18 @@
+{
+  "color": "auto",
+  "probe": {"url": "https://www.google.com/generate_204"},
+  "latency": {"url": "https://www.google.com/generate_204"},
+  "monitor": {
+    "url": "https://www.google.com/generate_204",
+    "interval": 5,
+    "no_dns_url": "http://1.1.1.1"
+  },
+  "doctor": {
+    "include_clipboard": true,
+    "include_qrencode": true,
+    "include_libev": true
+  },
+  "plugins": {
+    "paths": []
+  }
+}

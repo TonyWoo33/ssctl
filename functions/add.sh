@@ -6,6 +6,7 @@ cmd_add(){
   self_check
   local name="$1"; shift || true
   [ -n "$name" ] || die "用法：ssctl add <name> [--from-file FILE | --from-clipboard | --server HOST ...]"
+  require_safe_identifier "$name" "节点名"
 
   local from_file="" from_clipboard=0 server="" port="" method="" password="" lport="" engine="" plugin="" plugin_opts=""
   while [ $# -gt 0 ]; do
@@ -57,47 +58,15 @@ cmd_add(){
         fi
         decoded_cred="${decoded_cred//$'\r'/}"
 
-        local ss_method ss_password ss_server ss_port host_port rest
-        ss_method="${decoded_cred%%:*}"
-        rest="${decoded_cred#*:}"
-        ss_password="${rest%%@*}"
-        host_port="${rest#*@}"
-        if [[ "$host_port" == \[*\]*:* ]]; then
-            ss_server="${host_port%%]*}"
-            ss_server="${ss_server#[}"
-            ss_port="${host_port##*]:}"
+        local ss_method ss_password ss_server ss_port uri_plugin uri_plugin_opts uri_fragment
+        if ssctl_parse_ss_uri "$clipboard_content" ss_method ss_password ss_server ss_port uri_plugin uri_plugin_opts uri_fragment; then
+            local target_lport="${lport:-$DEFAULT_LOCAL_PORT}"
+            ssctl_build_node_json "$name" "$ss_server" "$ss_port" "$ss_method" "$ss_password" "$DEFAULT_LOCAL_ADDR" "$target_lport" "auto" "$uri_plugin" "$uri_plugin_opts" >"$dst" || die "写入失败：$dst"
+            ok "已从剪贴板导入节点：$name"
         else
-            ss_server="${host_port%%:*}"
-            ss_port="${host_port##*:}"
+            echo "$clipboard_content" | jq . >"$dst" || die "从剪贴板导入失败：不是合法的JSON或ss://链接"
+            ok "已从剪贴板导入JSON配置：$name"
         fi
-
-        local plugin="" plugin_opts=""
-        parse_plugin_params "$query" plugin plugin_opts
-
-        jq -n \
-          --arg name "$name" \
-          --arg server "$ss_server" \
-          --argjson server_port "$ss_port" \
-          --arg method "$ss_method" \
-          --arg password "$ss_password" \
-          --arg laddr "$DEFAULT_LOCAL_ADDR" \
-          --argjson lport "${lport:-$DEFAULT_LOCAL_PORT}" \
-          --arg engine "auto" \
-          --arg plugin "$plugin" \
-          --arg plugin_opts "$plugin_opts" \
-          '{
-             name:$name,
-             server:$server,
-             server_port:$server_port,
-             method:$method,
-             password:$password,
-             local_address:$laddr,
-             local_port:$lport,
-             engine:$engine
-           }
-           + (if ($plugin|length)>0 then {plugin:$plugin} else {} end)
-           + (if ($plugin_opts|length)>0 then {plugin_opts:$plugin_opts} else {} end)' >"$dst" || warn "写入失败：$dst"
-        ok "已从剪贴板导入节点：$name"
     else
         # Assume it is a JSON config
         echo "$clipboard_content" | jq . >"$dst" || die "从剪贴板导入失败：不是合法的JSON或ss://链接"
@@ -115,30 +84,9 @@ cmd_add(){
       *) warn "未知 engine=$engine，已忽略，按 auto 处理"; engine="auto" ;;
     esac
 
-    jq -n \
-      --arg name "$name" \
-      --arg server "$server" \
-      --argjson server_port "$port" \
-      --arg method "$method" \
-      --arg password "$password" \
-      --arg laddr "$DEFAULT_LOCAL_ADDR" \
-      --argjson lport "$lport" \
-      --arg engine "${engine:-auto}" \
-      --arg plugin "$plugin" \
-      --arg plugin_opts "$plugin_opts" \
-      '{
-         name:$name,
-         server:$server,
-         server_port:$server_port,
-         method:$method,
-         password:$password,
-         local_address:$laddr,
-         local_port:$lport,
-         engine:$engine
-       }
-       + (if ($plugin|length)>0 then {plugin:$plugin} else {} end)
-       + (if ($plugin_opts|length)>0 then {plugin_opts:$plugin_opts} else {} end)
-      ' >"$dst" || die "写入失败：$dst"
+    local target_lport="$lport"
+    [ -n "$target_lport" ] || target_lport="${DEFAULT_LOCAL_PORT}"
+    ssctl_build_node_json "$name" "$server" "$port" "$method" "$password" "$DEFAULT_LOCAL_ADDR" "$target_lport" "${engine:-auto}" "$plugin" "$plugin_opts" >"$dst" || die "写入失败：$dst"
     ok "已创建节点：$name"
   fi
 

@@ -56,7 +56,7 @@ monitor_fetch_logs(){
   done
 
   if [ ${#MONITOR_LOG_KEYS[@]} -gt "$max_keys" ]; then
-    MONITOR_LOG_KEYS=(${MONITOR_LOG_KEYS[@]: -$max_keys})
+    MONITOR_LOG_KEYS=("${MONITOR_LOG_KEYS[@]: -$max_keys}")
   fi
 
   if [ ${#new_entries[@]} -gt 0 ]; then
@@ -67,16 +67,19 @@ monitor_fetch_logs(){
     fi
   fi
 
+  if [ ${#new_entries[@]} -eq 0 ]; then
+    return 0
+  fi
   printf '%s\n' "${new_entries[@]}"
 }
 
 monitor_render_logs_text(){
   local entries=("$@")
   [ ${#entries[@]} -gt 0 ] || return 0
-  printf '--- logs ------------------------------------------------------------\n'
+  printf '--- logs ------------------------------------------------------------\n' >&2
   local item
   for item in "${entries[@]}"; do
-    logs_format_text "$item"
+    logs_format_text "$item" >&2
   done
 }
 
@@ -92,9 +95,13 @@ cmd_monitor(){
   while [ $# -gt 0 ]; do
     case "$1" in
       --name)       name="$2"; shift 2 ;;
+      --name=*)     name="${1#*=}"; shift ;;
       --url)        url="$2"; shift 2 ;;
+      --url=*)      url="${1#*=}"; shift ;;
       --interval|-i) interval="$2"; shift 2 ;;
+      --interval=*) interval="${1#*=}"; shift ;;
       --count|-n)   count="$2"; shift 2 ;;
+      --count=*)    count="${1#*=}"; shift ;;
       --tail|-f|-t) tail=1; shift ;;
       --log)        show_logs=1; shift ;;
       --speed)      show_speed=1; shift ;;
@@ -158,6 +165,10 @@ DOC
     log_limit=10
   fi
 
+  if [ "$tail" -eq 0 ] && [ "$count" -eq 0 ]; then
+    count=1
+  fi
+
   if [ "$show_logs" -eq 1 ] && [ "${SSCTL_MONITOR_LOG_ENABLED:-true}" = "false" ]; then
     warn "配置禁用日志捕获（SSCTL_MONITOR_LOG_ENABLED=false），已跳过 --log。"
     show_logs=0
@@ -180,9 +191,19 @@ DOC
   server="$(json_get "$name" server)"
   unit="$(unit_name_for "$name")"
 
-  if ! systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+  local unit_active=0 unit_pid=""
+  if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+    unit_active=1
+  else
+    unit_pid="$(ssctl_unit_pid "$name" "$unit" 2>/dev/null || true)"
+    if [ -n "$unit_pid" ]; then
+      unit_active=1
+    fi
+  fi
+
+  if [ "$unit_active" -eq 0 ]; then
     if [ "$output_format" = "json" ]; then
-      jq -n --arg name "$name" --arg unit "$unit" '{error:"unit_inactive",name:$name,unit:$unit}'
+      jq -c -n --arg name "$name" --arg unit "$unit" '{error:"unit_inactive",name:$name,unit:$unit}'
     else
       warn "服务未启动：$unit"
       warn "可先运行：ssctl start ${name}"
@@ -250,20 +271,22 @@ DOC
     [ "$show_logs" -eq 1 ] && log_flag="on"
     [ "$nodns" -eq 1 ] && dns_flag="off"
     printf 'MONITOR name=%s url=%s interval=%ss speed=%s log=%s dns=%s format=%s\n' \
-      "$name" "$url" "$interval" "$speed_flag" "$log_flag" "$dns_flag" "$output_format"
-    _hr "$header_width"
+      "$name" "$url" "$interval" "$speed_flag" "$log_flag" "$dns_flag" "$output_format" >&2
+    (_hr "$header_width") >&2
     if [ "$do_ping" -eq 1 ] && [ "$show_speed" -eq 1 ]; then
       printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-8s  %-9s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
-        "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "PINGms" "CURL(B/s)" "TX(B/s)" "RX(B/s)" "TOTAL(B/s)" "TX_TOTAL" "RX_TOTAL"
+        "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "PINGms" "CURL(B/s)" "TX(B/s)" "RX(B/s)" "TOTAL(B/s)" "TX_TOTAL" "RX_TOTAL" >&2
     elif [ "$show_speed" -eq 1 ]; then
       printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
-        "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "CURL(B/s)" "TX(B/s)" "RX(B/s)" "TOTAL(B/s)" "TX_TOTAL" "RX_TOTAL"
+        "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "CURL(B/s)" "TX(B/s)" "RX(B/s)" "TOTAL(B/s)" "TX_TOTAL" "RX_TOTAL" >&2
     elif [ "$do_ping" -eq 1 ]; then
-      printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-11s  %-9s\n" "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "PINGms" "SPEED(B/s)"
+      printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-11s  %-9s\n" \
+        "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "PINGms" "SPEED(B/s)" >&2
     else
-      printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s\n" "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "SPEED(B/s)"
+      printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s\n" \
+        "TIME" "OK" "RTTms" "TTFB" "CONN" "CODE" "SPEED(B/s)" >&2
     fi
-    _hr "$header_width"
+    (_hr "$header_width") >&2
   fi
 
   local last_stats_epoch=0 last_stats_entry="" stats_row=""
@@ -274,10 +297,9 @@ DOC
     total_cnt=$(( total_cnt + 1 ))
 
     local out="" rc=0 t_conn="0" t_ttfb="0" t_total="0" spd="0" code="0"
-    out="$(curl -sS -o /dev/null -w '%{time_connect} %{time_starttransfer} %{time_total} %{speed_download} %{http_code}' \
-            --connect-timeout 6 --max-time 10 \
-            ${socks_flag} "${laddr}:${lport}" \
-            "${url}" 2>/dev/null)" || rc=$? || true
+    local socks_mode="hostname"
+    [ "$nodns" -eq 1 ] && socks_mode="ip"
+    out="$(ssctl_measure_http "$laddr" "$lport" "$url" "$socks_mode")" || rc=$? || true
     rc=${rc:-0}
 
     t_conn="$(awk '{print $1}' <<<"$out")"
@@ -328,7 +350,7 @@ DOC
     if [ "$show_logs" -eq 1 ]; then
       mapfile -t text_logs < <(monitor_fetch_logs "$name" "$log_source_type" "$log_source_value" "$log_limit")
       if [ ${#text_logs[@]} -gt 0 ]; then
-        logs_json="$(printf '%s\n' "${text_logs[@]}" | jq -s '.')"
+        logs_json="$(printf '%s\n' "${text_logs[@]}" | jq -c -s '.')"
       else
         logs_json='[]'
       fi
@@ -346,7 +368,7 @@ DOC
         local stats_total_rate_num="$(monitor_number_or_default "$stats_total_rate" "0")"
         local stats_tx_total_num="$(monitor_number_or_default "$stats_tx_total" "0")"
         local stats_rx_total_num="$(monitor_number_or_default "$stats_rx_total" "0")"
-        stats_json="$(jq -n \
+        stats_json="$(jq -c -n \
           --argjson valid "$stats_valid_num" \
           --argjson tx_rate "$stats_tx_rate_num" \
           --argjson rx_rate "$stats_rx_rate_num" \
@@ -374,7 +396,7 @@ DOC
         ping_ms_json="$(monitor_number_or_default "$ping_ms_value" "0")"
       fi
 
-      jq -n \
+      jq -c -n \
         --arg time "$timestamp_iso" \
         --arg name "$name" \
         --arg url "$url" \
@@ -408,7 +430,7 @@ DOC
           "$(format_rate "$stats_rx_rate")" \
           "$(format_rate "$stats_total_rate")" \
           "$(human_bytes "$stats_tx_total")" \
-          "$(human_bytes "$stats_rx_total")"
+          "$(human_bytes "$stats_rx_total")" >&2
       elif [ "$show_speed" -eq 1 ]; then
         printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
           "$(date '+%F %T')" \
@@ -422,7 +444,7 @@ DOC
           "$(format_rate "$stats_rx_rate")" \
           "$(format_rate "$stats_total_rate")" \
           "$(human_bytes "$stats_tx_total")" \
-          "$(human_bytes "$stats_rx_total")"
+          "$(human_bytes "$stats_rx_total")" >&2
       elif [ "$do_ping" -eq 1 ]; then
         printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-11s  %-9s\n" \
           "$(date '+%F %T')" \
@@ -432,7 +454,7 @@ DOC
           "$conn_ms" \
           "${code:-000}" \
           "${ping_ms:-"--"}" \
-          "$speed_val"
+          "$speed_val" >&2
       else
         printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s\n" \
           "$(date '+%F %T')" \
@@ -441,15 +463,15 @@ DOC
           "$ttfb_ms" \
           "$conn_ms" \
           "${code:-000}" \
-          "$speed_val"
+          "$speed_val" >&2
       fi
 
       if [ "$show_speed" -eq 1 ]; then
         if [ "$stats_warming" = "1" ]; then
-          printf '    stats: warming up（等待下一次采样以计算速率）\n'
+          printf '    stats: warming up（等待下一次采样以计算速率）\n' >&2
         fi
         if [ -n "$stats_note" ]; then
-          printf '    stats: %s\n' "$stats_note"
+          printf '    stats: %s\n' "$stats_note" >&2
         fi
       fi
 
@@ -459,8 +481,8 @@ DOC
 
       if (( total_cnt % 5 == 0 )); then
         local rate=$(( ok_cnt*100/total_cnt ))
-        printf "%s[✓]%s 成功率：%d%%  （%d/%d）\n" "$C_GREEN" "$C_RESET" "$rate" "$ok_cnt" "$total_cnt"
-        _hr "$header_width"
+        printf "%s[✓]%s 成功率：%d%%  （%d/%d）\n" "$C_GREEN" "$C_RESET" "$rate" "$ok_cnt" "$total_cnt" >&2
+        (_hr "$header_width") >&2
       fi
     fi
 

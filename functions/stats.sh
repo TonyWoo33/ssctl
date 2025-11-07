@@ -88,9 +88,81 @@ stats_collect_node(){
   echo "$node|$valid|$tx_rate|$rx_rate|$total_rate|$tx_bytes|$rx_bytes|$rtt|$pid|$warming|$note"
 }
 
+stats_run_watch_mode(){
+  local args=("$@")
+  local monitor_args=("--speed")
+  local i=0 arg
+
+  while [ $i -lt ${#args[@]} ]; do
+    arg="${args[i]}"
+    case "$arg" in
+      --watch)
+        i=$((i + 1))
+        continue
+        ;;
+      --aggregate)
+        warn "--watch 模式不支持 --aggregate，已忽略。"
+        i=$((i + 1))
+        continue
+        ;;
+      --filter)
+        warn "--watch 模式不支持 --filter，已忽略。"
+        if [ $((i + 1)) -lt ${#args[@]} ]; then
+          i=$((i + 2))
+        else
+          i=$((i + 1))
+        fi
+        continue
+        ;;
+      --filter=*)
+        warn "--watch 模式不支持 --filter，已忽略。"
+        i=$((i + 1))
+        continue
+        ;;
+      --interval|--count|--stats-interval|--format|--url|--name)
+        monitor_args+=("$arg")
+        i=$((i + 1))
+        if [ $i -lt ${#args[@]} ]; then
+          monitor_args+=("${args[i]}")
+          i=$((i + 1))
+        fi
+        continue
+        ;;
+      --interval=*|--count=*|--stats-interval=*|--format=*|--url=*|--name=*)
+        monitor_args+=("$arg")
+        i=$((i + 1))
+        continue
+        ;;
+      --json)
+        monitor_args+=("--json")
+        i=$((i + 1))
+        continue
+        ;;
+      *)
+        monitor_args+=("$arg")
+        i=$((i + 1))
+        ;;
+    esac
+  done
+
+  cmd_monitor "${monitor_args[@]}"
+}
+
 cmd_stats(){
   self_check
   ssctl_read_config
+
+  local original_args=("$@") arg watch_mode=0
+  for arg in "${original_args[@]}"; do
+    if [ "$arg" = "--watch" ]; then
+      watch_mode=1
+      break
+    fi
+  done
+  if [ "$watch_mode" -eq 1 ]; then
+    stats_run_watch_mode "${original_args[@]}"
+    return $?
+  fi
 
   local interval=2 count=0 aggregate=0 format="text"
   local positional=() filters=()
@@ -228,7 +300,7 @@ DOC
       fi
 
       if [ "$format" = "json" ]; then
-        node_jsons+=("$(jq -n \
+        node_jsons+=("$(jq -c -n \
           --arg name "$node" \
           --arg pid "$pid" \
           --arg note "$note" \
@@ -240,47 +312,57 @@ DOC
           --argjson rx_total "${rx_total:-0}" \
           --argjson valid "${valid:-0}" \
           --argjson warming "${warming:-0}" \
-          '{name:$name,pid:($pid|tonumber?),tx_bytes_per_second:$tx_rate,rx_bytes_per_second:$rx_rate,total_bytes_per_second:$total_rate,tx_total_bytes:$tx_total,rx_total_bytes:$rx_total,rtt_ms:(($rtt=="-")?null:($rtt|tonumber)),valid:($valid==1),warming_up:($warming==1),note:($note|length>0?$note:null)}' )")
+          '{name:$name,
+            pid:(try ($pid|tonumber) catch null),
+            tx_bytes_per_second:$tx_rate,
+            rx_bytes_per_second:$rx_rate,
+            total_bytes_per_second:$total_rate,
+            tx_total_bytes:$tx_total,
+            rx_total_bytes:$rx_total,
+            rtt_ms:(if $rtt == "-" then null else (try ($rtt|tonumber) catch null) end),
+            valid:($valid==1),
+            warming_up:($warming==1)} 
+           | (if ($note|length) > 0 then . + {note:$note} else . end)' )")
       fi
     done
 
     if [ "$format" = "text" ]; then
       if [ $header_printed -eq 0 ]; then
         printf '%-19s  %-12s  %10s  %10s  %11s  %12s  %12s  %8s\n' \
-          "TIME" "NODE" "TX(B/s)" "RX(B/s)" "TOTAL(B/s)" "TX_TOTAL" "RX_TOTAL" "PID"
-        _hr 100
+          "TIME" "NODE" "TX(B/s)" "RX(B/s)" "TOTAL(B/s)" "TX_TOTAL" "RX_TOTAL" "PID" >&2
+        (_hr 100) >&2
         header_printed=1
       fi
       for row in "${rows[@]}"; do
         IFS='|' read -r name valid tx_rate rx_rate total_rate tx_total rx_total rtt pid warming note <<<"$row"
         printf '%-19s  %-12s  %10s  %10s  %11s  %12s  %12s  %8s\n' \
           "$timestamp" "$name" "$(format_rate "$tx_rate")" "$(format_rate "$rx_rate")" \
-          "$(format_rate "$total_rate")" "$(human_bytes "$tx_total")" "$(human_bytes "$rx_total")" "${pid:-0}"
+          "$(format_rate "$total_rate")" "$(human_bytes "$tx_total")" "$(human_bytes "$rx_total")" "${pid:-0}" >&2
         if [ -n "$note" ]; then
-          printf '    note: %s\n' "$note"
+          printf '    note: %s\n' "$note" >&2
         fi
       done
       if [ $aggregate -eq 1 ]; then
         printf '%-19s  %-12s  %10s  %10s  %11s  %12s  %12s  %8s\n' \
           "$timestamp" "TOTAL" "$(format_rate "$aggregate_tx_rate")" "$(format_rate "$aggregate_rx_rate")" \
           "$(format_rate "$aggregate_total_rate")" "$(human_bytes "$aggregate_tx_total")" \
-          "$(human_bytes "$aggregate_rx_total")" "-"
+          "$(human_bytes "$aggregate_rx_total")" "-" >&2
       fi
       if [ $warming_any -eq 1 ]; then
-        printf '    warming up: 需要至少两次采样才能计算速率。\n'
+        printf '    warming up: 需要至少两次采样才能计算速率。\n' >&2
       fi
       if [ "$count" -eq 0 ] || [ $iteration -lt "$count" ]; then
-        printf '\n'
+        printf '\n' >&2
       fi
     else
       local nodes_payload aggregate_obj="null"
       if [ ${#node_jsons[@]} -gt 0 ]; then
-        nodes_payload="$(printf '%s\n' "${node_jsons[@]}" | jq -s '.')"
+        nodes_payload="$(printf '%s\n' "${node_jsons[@]}" | jq -c -s '.')"
       else
         nodes_payload='[]'
       fi
       if [ $aggregate -eq 1 ]; then
-        aggregate_obj="$(jq -n \
+        aggregate_obj="$(jq -c -n \
           --arg name "TOTAL" \
           --argjson tx_rate "$aggregate_tx_rate" \
           --argjson rx_rate "$aggregate_rx_rate" \
@@ -289,7 +371,7 @@ DOC
           --argjson rx_total "$aggregate_rx_total" \
           '{name:$name,aggregate:true,tx_bytes_per_second:$tx_rate,rx_bytes_per_second:$rx_rate,total_bytes_per_second:$total_rate,tx_total_bytes:$tx_total,rx_total_bytes:$rx_total}')"
       fi
-      jq -n \
+      jq -c -n \
         --arg time "$timestamp" \
         --argjson interval "$interval" \
         --argjson aggregate "$aggregate_obj" \

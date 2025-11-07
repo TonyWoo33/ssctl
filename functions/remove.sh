@@ -4,6 +4,7 @@ cmd_remove(){
   self_check
   local name="$1"; shift || true
   [ -n "$name" ] || die "用法：ssctl remove <name> [--purge] [-y|--yes]"
+  require_safe_identifier "$name" "节点名"
 
   local purge=0 yes=0
   while [ $# -gt 0 ]; do

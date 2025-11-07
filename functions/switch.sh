@@ -3,6 +3,7 @@
 cmd_switch(){
   self_check
   local name="${1:-}"; [ -n "$name" ] || die "用法：ssctl switch <name>"
+  require_safe_identifier "$name" "节点名"
   local p; p="$(node_json_path "$name")"
   [ -f "$p" ] || die "不存在节点：$name"
   ln -sfn "$p" "${CURRENT_JSON}"
