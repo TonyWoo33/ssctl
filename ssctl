@@ -12,6 +12,10 @@ export NODES_DIR="${CONF_DIR}/nodes"
 export CURRENT_JSON="${CONF_DIR}/current.json"
 export SYS_DIR="${HOME}/.config/systemd/user"
 
+# Shadowsocks binary names
+export BIN_RUST="sslocal"      # shadowsocks-rust
+export BIN_LIBEV="ss-local"    # shadowsocks-libev
+
 export DEFAULT_LOCAL_ADDR="127.0.0.1"
 export DEFAULT_LOCAL_PORT="1080"
 export DEFAULT_PROBE_URL="https://www.google.com/generate_204"
@@ -333,7 +337,6 @@ for f in "${LIB_DIR}"/functions/*.sh; do
   . "$f"
 done
 
-main "$@" || true
 self_check(){
   local required_tools=(jq systemctl curl)
   local missing=()
@@ -347,3 +350,5 @@ self_check(){
   fi
   init_dirs
 }
+
+main "$@" || true

@@ -204,19 +204,23 @@ current_running_node(){
 }
 
 stop_all_units(){
-  set +e
   local any=0
-  while read -r u; do
-    [ -n "$u" ] || continue
-    any=1
-    systemd_user_disable_now "$u" || true
-    rm -f "${SYS_DIR}/${u}" 2>/dev/null || true
-    echo " - stopped $u"
-  done < <(systemctl --user list-unit-files 'sslocal-*' --no-legend | awk '{print $1}')
-  if [ "$any" = 1 ]; then
-    systemd_user_daemon_reload || true
+  local units
+  units="$(systemctl --user list-unit-files 'sslocal-*' --no-legend | awk '{print $1}')"
+
+  if [ -n "$units" ]; then
+    while IFS= read -r u; do
+      [ -n "$u" ] || continue
+      any=1
+      systemd_user_disable_now "$u" || true
+      rm -f "${SYS_DIR}/${u}" 2>/dev/null || true
+      echo " - stopped $u"
+    done <<< "$units"
+
+    if [ "$any" = 1 ]; then
+      systemd_user_daemon_reload || true
+    fi
   fi
-  set -e
 }
 
 write_unit(){
