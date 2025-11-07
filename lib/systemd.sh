@@ -69,7 +69,7 @@ systemd_cache_unit_states(){
   while IFS= read -r line; do
     line="${line#"${line%%[![:space:]]*}"}"
     [ -n "$line" ] || continue
-    read -r unit load active sub _rest <<<"$line"
+    read -r unit _ active sub _rest <<<"$line"
     [ -n "$unit" ] || continue
     __SSCTL_UNIT_STATE_CACHE["$unit"]="${active:-}:${sub:-}"
   done <<<"$snapshot"
