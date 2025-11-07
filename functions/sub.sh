@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-. "${SCRIPT_DIR:-.}/functions/utils.sh"
+. "${SCRIPT_DIR:-.}/lib/utils.sh"
 
 SUB_CONF="${CONF_DIR}/subscriptions.json"
 
@@ -102,7 +102,7 @@ cmd_sub(){
 
         info "正在处理订阅: $alias"
         local encoded_list
-        if ! encoded_list=$(curl -sS --max-time 20 "$url"); then
+        if ! encoded_list=$(curl -sS --connect-timeout 5 --max-time 10 "$url"); then
           warn "下载失败: $alias ($url)"
           continue
         fi

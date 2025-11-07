@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 CONFIG_PATH_DEFAULT="${HOME}/.config/ssctl/config.json"
+EXAMPLE_CONFIG_PATH="${SCRIPT_DIR:-.}/config.example.json"
 CONFIG_DEFAULT_JSON='{
   "color": "auto",
   "probe": {"url": "https://www.google.com/generate_204"},
@@ -142,4 +143,16 @@ ssctl_read_config(){
     done <"$env_path"
   fi
   __SSCTL_ENV_LOADED=1
+}
+
+config_init(){
+  local target_path="${1:-$CONFIG_PATH_DEFAULT}"
+  local example_path="${2:-$EXAMPLE_CONFIG_PATH}"
+  if [ ! -f "$example_path" ]; then
+    error "严重错误：示例配置文件 $example_path 丢失！"
+    error "请从 Git 仓库恢复此文件。"
+    return 1
+  fi
+  mkdir -p "$(dirname "$target_path")"
+  cp "$example_path" "$target_path"
 }

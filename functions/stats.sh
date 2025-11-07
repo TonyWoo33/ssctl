@@ -27,22 +27,31 @@ stats_write_cache(){
 }
 
 stats_collect_node(){
-  local node="$1" epoch="$2" cache_dir="$3"
-  local unit lport pid metrics rc note="" valid=0 warming=0
+  local node_json="$1" epoch="$2" cache_dir="$3"
+  local name lport unit pid metrics rc note="" valid=0 warming=0
   local tx_bytes=0 rx_bytes=0 tx_rate=0 rx_rate=0 total_rate=0 rtt="-"
 
-  unit="$(unit_name_for "$node")"
-  lport="$(json_get "$node" local_port)"; [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
+  name="$(jq -r '.__name' <<<"$node_json")"
+  lport="$(jq -r '.local_port // empty' <<<"$node_json")"; [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
+  unit="sslocal-${name}-${lport}.service"
 
-  pid="$(ssctl_unit_pid "$node" "$unit" 2>/dev/null || true)"
-  if [ -z "$pid" ]; then
+  pid=""
+  local unit_active=0
+  if systemd_unit_active_cached "$unit"; then
+    unit_active=1
+  fi
+  pid="$(ssctl_unit_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
+  if [ "$unit_active" -eq 0 ] && [ -n "$pid" ]; then
+    unit_active=1
+  fi
+  if [ "$unit_active" -eq 0 ] || [ -z "$pid" ]; then
     note="unit inactive或PID不可用"
-    echo "$node|0|0|0|0|0|0|$rtt|${pid:-0}|0|$note"
+    echo "$name|0|0|0|0|0|0|$rtt|${pid:-0}|0|$note"
     return 0
   fi
 
   local cache_prev prev_ts prev_tx prev_rx delta_tx delta_rx delta_t
-  cache_prev="$(stats_read_cache "$node" "$cache_dir")"
+  cache_prev="$(stats_read_cache "$name" "$cache_dir")"
   read -r prev_ts prev_tx prev_rx <<<"$cache_prev"
 
   metrics="$(collect_proc_bytes "$pid" "$lport" 2>/dev/null)"
@@ -59,7 +68,7 @@ stats_collect_node(){
         99) note="当前平台不支持采样" ;;
         *) note="采样失败 (code=$rc)" ;;
       esac
-      echo "$node|0|0|0|0|0|0|$rtt|$pid|0|$note"
+      echo "$name|0|0|0|0|0|0|$rtt|$pid|0|$note"
       return 0
     fi
   fi
@@ -70,7 +79,7 @@ stats_collect_node(){
   tx_bytes="${tx_bytes:-0}"
   rx_bytes="${rx_bytes:-0}"
 
-  stats_write_cache "$node" "$cache_dir" "$epoch" "$tx_bytes" "$rx_bytes"
+  stats_write_cache "$name" "$cache_dir" "$epoch" "$tx_bytes" "$rx_bytes"
 
   if [ "$prev_ts" -gt 0 ] && [ "$epoch" -gt "$prev_ts" ] && [ "$tx_bytes" -ge "$prev_tx" ] && [ "$rx_bytes" -ge "$prev_rx" ]; then
     delta_tx=$(( tx_bytes - prev_tx ))
@@ -85,7 +94,7 @@ stats_collect_node(){
 
   total_rate=$(( tx_rate + rx_rate ))
   valid=1
-  echo "$node|$valid|$tx_rate|$rx_rate|$total_rate|$tx_bytes|$rx_bytes|$rtt|$pid|$warming|$note"
+  echo "$name|$valid|$tx_rate|$rx_rate|$total_rate|$tx_bytes|$rx_bytes|$rtt|$pid|$warming|$note"
 }
 
 stats_run_watch_mode(){
@@ -264,6 +273,14 @@ DOC
     die "filter 结果为空"
   fi
 
+  local node_configs=()
+  if ! mapfile -t node_configs < <(nodes_json_stream "${nodes[@]}"); then
+    die "无法读取节点配置"
+  fi
+  if [ ${#node_configs[@]} -eq 0 ]; then
+    die "未能加载任何节点配置"
+  fi
+
   if [ "${SSCTL_MONITOR_STATS_ENABLED:-true}" = "false" ]; then
     warn "配置禁用 stats 采集（SSCTL_MONITOR_STATS_ENABLED=false），仍继续执行。"
   fi
@@ -281,12 +298,15 @@ DOC
 
     local rows=() row aggregate_tx_rate=0 aggregate_rx_rate=0 aggregate_total_rate=0
     local aggregate_tx_total=0 aggregate_rx_total=0 warming_any=0
-    local node_jsons=()
+    local node_result_jsons=()
 
-    for node in "${nodes[@]}"; do
-      row="$(stats_collect_node "$node" "$epoch" "$cache_dir")"
+    systemd_cache_unit_states 'sslocal-*.service'
+
+    local node_json
+    for node_json in "${node_configs[@]}"; do
+      row="$(stats_collect_node "$node_json" "$epoch" "$cache_dir")"
       rows+=("$row")
-      IFS='|' read -r _ valid tx_rate rx_rate total_rate tx_total rx_total rtt pid warming note <<<"$row"
+      IFS='|' read -r name valid tx_rate rx_rate total_rate tx_total rx_total rtt pid warming note <<<"$row"
       if [ "$valid" = "1" ]; then
         aggregate_tx_rate=$(( aggregate_tx_rate + tx_rate ))
         aggregate_rx_rate=$(( aggregate_rx_rate + rx_rate ))
@@ -299,8 +319,8 @@ DOC
       fi
 
       if [ "$format" = "json" ]; then
-        node_jsons+=("$(jq -c -n \
-          --arg name "$node" \
+        node_result_jsons+=("$(jq -c -n \
+          --arg name "$name" \
           --arg pid "$pid" \
           --arg note "$note" \
           --arg rtt "$rtt" \
@@ -355,8 +375,8 @@ DOC
       fi
     else
       local nodes_payload aggregate_obj="null"
-      if [ ${#node_jsons[@]} -gt 0 ]; then
-        nodes_payload="$(printf '%s\n' "${node_jsons[@]}" | jq -c -s '.')"
+      if [ ${#node_result_jsons[@]} -gt 0 ]; then
+        nodes_payload="$(printf '%s\n' "${node_result_jsons[@]}" | jq -c -s '.')"
       else
         nodes_payload='[]'
       fi

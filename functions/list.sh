@@ -20,6 +20,10 @@ cmd_list(){
   local node_files=("${NODES_DIR}"/*.json)
   local all_node_data="[]"
   if [ "${#node_files[@]}" -gt 0 ]; then
+    # jq pipeline breakdown:
+    #   1) -s slurps every node file into an array so we only spawn jq once.
+    #   2) map(...) enriches each object with derived fields (safe name from filename, defaults for ports/engine).
+    #   3) .[] emits the array back as newline-delimited objects for easy per-node lookup below.
     all_node_data=$(jq -s 'map({name: (.name // (input_filename | sub(".json$"; "") | sub(".*/"; ""))), lp: (.local_port // "1080"), meth: .method, eng: (.engine // "auto")}) | .[]' "${node_files[@]}")
   fi
 

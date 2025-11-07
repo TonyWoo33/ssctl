@@ -58,18 +58,21 @@ DOC
     die "未找到节点"
   fi
 
-  local names=() latencies=() ok_flags=() errors=()
-  local node
-  for node in "${nodes[@]}"; do
-    local laddr lport unit unit_active=0 unit_pid=""
-    laddr="$(json_get "$node" local_address)"; [ -n "$laddr" ] || laddr="$DEFAULT_LOCAL_ADDR"
-    lport="$(json_get "$node" local_port)";   [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
-    unit="$(unit_name_for "$node")"
+  systemd_cache_unit_states 'sslocal-*.service'
 
-    if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+  local names=() latencies=() ok_flags=() errors=()
+  while IFS= read -r node_json || [ -n "$node_json" ]; do
+    [ -n "$node_json" ] || continue
+    local name laddr lport unit unit_active=0 unit_pid=""
+    name="$(jq -r '.__name' <<<"$node_json")"
+    laddr="$(jq -r '.local_address // empty' <<<"$node_json")"; [ -n "$laddr" ] || laddr="$DEFAULT_LOCAL_ADDR"
+    lport="$(jq -r '.local_port // empty' <<<"$node_json")";   [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
+    unit="sslocal-${name}-${lport}.service"
+
+    if systemd_unit_active_cached "$unit"; then
       unit_active=1
     else
-      unit_pid="$(ssctl_unit_pid "$node" "$unit" 2>/dev/null || true)"
+      unit_pid="$(ssctl_unit_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
       [ -n "$unit_pid" ] && unit_active=1
     fi
 
@@ -89,11 +92,11 @@ DOC
       error="unit_inactive"
     fi
 
-    names+=("$node")
+    names+=("$name")
     latencies+=("$latency_val")
     ok_flags+=("$ok_flag")
     errors+=("$error")
-  done
+  done < <(nodes_json_stream "${nodes[@]}")
 
   if [ "$output_format" = "text" ]; then
     local W_NAME=22 W_LATENCY=14

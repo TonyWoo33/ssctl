@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-. "${SCRIPT_DIR:-.}/functions/utils.sh"
+. "${SCRIPT_DIR:-.}/lib/utils.sh"
 
 cmd_add(){
   self_check

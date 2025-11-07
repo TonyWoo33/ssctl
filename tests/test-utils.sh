@@ -6,7 +6,7 @@ export DEFAULT_LOCAL_ADDR="127.0.0.1"
 export DEFAULT_LOCAL_PORT="1080"
 
 # shellcheck disable=SC1090
-. "${ROOT_DIR}/functions/utils.sh"
+. "${ROOT_DIR}/lib/utils.sh"
 
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ssctl-tests.XXXX")"
 cleanup(){ rm -rf "$tmp_dir"; }

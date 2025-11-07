@@ -187,16 +187,21 @@ DOC
   fi
 
   local laddr lport unit server
-  laddr="$(json_get "$name" local_address)"; [ -n "$laddr" ] || laddr="$DEFAULT_LOCAL_ADDR"
-  lport="$(json_get "$name" local_port)";   [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
-  server="$(json_get "$name" server)"
-  unit="$(unit_name_for "$name")"
+  local node_json=""
+  node_json="$(nodes_json_stream "$name")"
+  [ -n "$node_json" ] || die "无法读取节点配置：$name"
+
+  laddr="$(jq -r '.local_address // empty' <<<"$node_json")"; [ -n "$laddr" ] || laddr="$DEFAULT_LOCAL_ADDR"
+  lport="$(jq -r '.local_port // empty' <<<"$node_json")";   [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
+  server="$(jq -r '.server // empty' <<<"$node_json")"
+  unit="sslocal-${name}-${lport}.service"
 
   local unit_active=0 unit_pid=""
-  if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+  systemd_cache_unit_states 'sslocal-*.service'
+  if systemd_unit_active_cached "$unit"; then
     unit_active=1
   else
-    unit_pid="$(ssctl_unit_pid "$name" "$unit" 2>/dev/null || true)"
+    unit_pid="$(ssctl_unit_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
     if [ -n "$unit_pid" ]; then
       unit_active=1
     fi

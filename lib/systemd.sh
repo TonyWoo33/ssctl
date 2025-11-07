@@ -6,6 +6,31 @@ init_dirs(){
   chmod 700 "${CONF_DIR}" "${NODES_DIR}"
 }
 
+systemd_user_action(){
+  local action="${1:-}"; shift || true
+  [ -n "$action" ] || die "systemd_user_action 需要 action 参数"
+  local output=""
+  if ! output=$(systemctl --user "$action" "$@" 2>&1); then
+    error "Systemd 操作 '$action' 失败: $output"
+    return 1
+  fi
+  return 0
+}
+
+systemd_user_enable_now(){
+  local unit="$1"
+  systemd_user_action enable --now "$unit"
+}
+
+systemd_user_disable_now(){
+  local unit="$1"
+  systemd_user_action disable --now "$unit"
+}
+
+systemd_user_daemon_reload(){
+  systemd_user_action daemon-reload
+}
+
 engine_check(){
   local engine="$1" binary_path="${2:-}"
   if [ -z "$binary_path" ]; then
@@ -32,6 +57,37 @@ engine_binary_path(){
       ;;
   esac
   printf '%s\n' "$path"
+}
+
+declare -Ag __SSCTL_UNIT_STATE_CACHE=()
+
+systemd_cache_unit_states(){
+  local pattern="${1:-sslocal-*.service}"
+  local snapshot
+  snapshot="$(systemctl --user list-units --full --all --plain --no-legend "$pattern" 2>/dev/null || true)"
+  __SSCTL_UNIT_STATE_CACHE=()
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [ -n "$line" ] || continue
+    read -r unit load active sub _rest <<<"$line"
+    [ -n "$unit" ] || continue
+    __SSCTL_UNIT_STATE_CACHE["$unit"]="${active:-}:${sub:-}"
+  done <<<"$snapshot"
+}
+
+systemd_cached_unit_state(){
+  local unit="$1"
+  printf '%s\n' "${__SSCTL_UNIT_STATE_CACHE[$unit]:-}"
+}
+
+systemd_unit_active_cached(){
+  local unit="$1"
+  local state
+  state="$(systemd_cached_unit_state "$unit")"
+  case "$state" in
+    active:*) return 0 ;;
+  esac
+  return 1
 }
 
 node_json_path(){
@@ -79,6 +135,27 @@ list_nodes(){
       warn "检测到非法节点文件名，已忽略：$base"
     fi
   done
+}
+
+nodes_json_stream(){
+  local names=("$@")
+  local files=()
+  local name path
+  if [ ${#names[@]} -eq 0 ]; then
+    return 0
+  fi
+  for name in "${names[@]}"; do
+    path="$(node_json_path "$name")"
+    [ -r "$path" ] || die "找不到节点 JSON：$path"
+    files+=("$path")
+  done
+  jq -nc '
+    def node_name:
+      input_filename
+      | (split("/") | last)
+      | (if endswith(".json") then rtrimstr(".json") else . end);
+    inputs | . + {__name: node_name}
+  ' "${files[@]}"
 }
 
 unit_name_for(){
@@ -132,12 +209,12 @@ stop_all_units(){
   while read -r u; do
     [ -n "$u" ] || continue
     any=1
-    systemctl --user disable --now "$u" 2>/dev/null || true
+    systemd_user_disable_now "$u" || true
     rm -f "${SYS_DIR}/${u}" 2>/dev/null || true
     echo " - stopped $u"
   done < <(systemctl --user list-unit-files 'sslocal-*' --no-legend | awk '{print $1}')
   if [ "$any" = 1 ]; then
-    systemctl --user daemon-reload || true
+    systemd_user_daemon_reload || true
   fi
   set -e
 }

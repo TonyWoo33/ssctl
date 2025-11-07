@@ -7,9 +7,11 @@ cmd_start(){
   stop_all_units
 
   write_unit "$name"
-  systemctl --user daemon-reload
-  systemctl --user enable --now "$(unit_name_for "$name")"
-  ok "已启动: $(unit_name_for "$name")"
+  local unit
+  unit="$(unit_name_for "$name")"
+  systemd_user_daemon_reload
+  systemd_user_enable_now "$unit"
+  ok "已启动: $unit"
 
   # 更新 current 指向
   ln -sfn "$(node_json_path "$name")" "${CURRENT_JSON}"

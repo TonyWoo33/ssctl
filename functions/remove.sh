@@ -21,9 +21,9 @@ cmd_remove(){
 
   # 停止并清理 unit
   if systemctl --user list-unit-files --no-legend "$unit" | awk '{print $1}' | grep -qx "$unit"; then
-    systemctl --user disable --now "$unit" 2>/dev/null || true
+    systemd_user_disable_now "$unit"
     rm -f "${SYS_DIR}/${unit}" 2>/dev/null || true
-    systemctl --user daemon-reload
+    systemd_user_daemon_reload
     ok "已删除 unit：$unit"
   else
     warn "未发现 unit：$unit（可能未创建或已清理）"

@@ -311,7 +311,7 @@ export SSCTL_LIB_DIR="$LIB_DIR"
 SCRIPT_DIR="$LIB_DIR"
 
 LIB_CORE_DIR="${LIB_DIR}/lib"
-for lib_file in common config systemd deps plugins; do
+for lib_file in common config systemd deps plugins utils init; do
   lib_path="${LIB_CORE_DIR}/${lib_file}.sh"
   if [ ! -f "$lib_path" ]; then
     printf '%s\n' "ssctl: 缺少库文件 ${lib_path}" >&2

@@ -66,7 +66,7 @@ DOC
   if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
     unit_active=1
   else
-    unit_pid="$(ssctl_unit_pid "$name" "$unit" 2>/dev/null || true)"
+    unit_pid="$(ssctl_unit_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
     if [ -n "$unit_pid" ]; then
       unit_active=1
     fi
@@ -148,7 +148,7 @@ DOC
     if [ "$output_format" = "text" ]; then
       info "STEP B: 仅链路 http://1.1.1.1"
     fi
-    curl -sS -I --connect-timeout 6 --max-time 10 \
+    curl -sS -I --connect-timeout 5 --max-time 10 \
       --socks5 "${laddr}:${lport}" \
       "http://1.1.1.1" -o /dev/null 2>/dev/null || link_curl_rc=$?
     if [ "$link_curl_rc" -eq 0 ]; then
@@ -165,8 +165,8 @@ DOC
 
   local ip="" country=""
   if [ "$http_ok" -eq 1 ]; then
-    ip="$(curl -sS --connect-timeout 4 --max-time 6 --socks5-hostname "${laddr}:${lport}" "${PROBE_IP_LOOKUP_URL}" 2>/dev/null || true)"
-    country="$(curl -sS --connect-timeout 4 --max-time 6 --socks5-hostname "${laddr}:${lport}" "${PROBE_COUNTRY_LOOKUP_URL}" 2>/dev/null || true)"
+    ip="$(curl -sS --connect-timeout 5 --max-time 10 --socks5-hostname "${laddr}:${lport}" "${PROBE_IP_LOOKUP_URL}" 2>/dev/null || true)"
+    country="$(curl -sS --connect-timeout 5 --max-time 10 --socks5-hostname "${laddr}:${lport}" "${PROBE_COUNTRY_LOOKUP_URL}" 2>/dev/null || true)"
     if [ "$output_format" = "text" ]; then
       [ -n "$ip" ] && ok "出口 IP: ${ip}"
       [ -n "$country" ] && ok "国家/地区: ${country}"

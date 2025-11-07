@@ -161,14 +161,15 @@ ssctl_measure_http(){
         flag="--socks5"
     fi
     curl -sS -o /dev/null -w '%{time_connect} %{time_starttransfer} %{time_total} %{speed_download} %{http_code}' \
-      --connect-timeout 6 --max-time 10 \
+      --connect-timeout 5 --max-time 10 \
       ${flag} "${laddr}:${lport}" \
       "${url}" 2>/dev/null
 }
 
 # Retrieve the main PID for a node or unit. Uses systemd first and falls back to pgrep.
+# Optional third argument lets callers supply a known local_port to avoid extra config reads.
 ssctl_unit_pid(){
-    local name="$1" unit="$2" pid="" cfg=""
+    local name="$1" unit="$2" provided_port="${3:-}" pid="" cfg=""
     [ -n "$name" ] || return 1
     if [[ "$name" == *.service ]]; then
         unit="$name"
@@ -201,8 +202,8 @@ ssctl_unit_pid(){
     if [ -n "$cfg" ]; then
         patterns+=("sslocal.*${cfg}" "ss-local.*${cfg}")
     fi
-    local port
-    if command -v json_get >/dev/null 2>&1; then
+    local port="$provided_port"
+    if [ -z "$port" ] && command -v json_get >/dev/null 2>&1; then
         port="$(json_get "$name" local_port 2>/dev/null || true)"
         [ -n "$port" ] || port=""
     fi

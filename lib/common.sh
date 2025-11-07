@@ -32,6 +32,7 @@ info(){ printf "%s[*]%s %s\n"   "$C_BLUE"  "$C_RESET" "$*" >&2; }
 ok(){   printf "%s[✓]%s %s\n"   "$C_GREEN" "$C_RESET" "$*" >&2; }
 warn(){ printf "%s[!]%s %s\n"   "$C_YELLOW" "$C_RESET" "$*" >&2; }
 err(){  printf "%s[✗]%s %s\n"   "$C_RED"   "$C_RESET" "$*" >&2; }
+error(){ err "$@"; }
 die(){  err "$*"; exit 1; }
 need_bin(){ command -v "$1" >/dev/null 2>&1 || die "缺少依赖：$1"; }
 
