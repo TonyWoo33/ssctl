@@ -154,9 +154,9 @@ DOC
     name="$(resolve_name "$name")"
   fi
 
-  if [ "$show_logs" -eq 0 ] && [ "$tail" -eq 1 ]; then
-    show_logs=1
-  fi
+  # if [ "$show_logs" -eq 0 ] && [ "$tail" -eq 1 ]; then
+  #   show_logs=1
+  # fi
 
   if [ -z "$stats_interval" ]; then
     stats_interval="$interval"
@@ -345,7 +345,9 @@ DOC
       local now_epoch
       now_epoch="$(date +%s)"
       if [ "$last_stats_epoch" -eq 0 ] || [ $(( now_epoch - last_stats_epoch )) -ge "$stats_interval" ]; then
-        last_stats_entry="$(stats_collect_node "$name" "$now_epoch" "$stats_cache_dir")"
+        #关键修复：在采集数据前，刷新 systemd 状态缓存
+        systemd_cache_unit_states 'sslocal-*.service'
+        last_stats_entry="$(stats_collect_node "$node_json" "$now_epoch" "$stats_cache_dir")"
         last_stats_epoch="$now_epoch"
       fi
       if [ -n "$last_stats_entry" ]; then
@@ -434,7 +436,7 @@ DOC
          | (if ($logs|length)>0 then . + {logs:$logs} else . end)'
     else
       if [ "$do_ping" -eq 1 ] && [ "$show_speed" -eq 1 ]; then
-        printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-8s  %-9s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
+        printf "\r%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-8s  %-9s  %-9s  %-9s  %-9s  %-12s  %-12s \033[K" \
           "$(date '+%F %T')" \
           "$printf_ok" \
           "$rtt_ms" \
@@ -449,7 +451,7 @@ DOC
           "$(human_bytes "$stats_tx_total")" \
           "$(human_bytes "$stats_rx_total")" >&2
       elif [ "$show_speed" -eq 1 ]; then
-        printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s  %-9s  %-9s  %-9s  %-12s  %-12s\n" \
+        printf "\r%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s  %-9s  %-9s  %-9s  %-12s  %-12s \033[K" \
           "$(date '+%F %T')" \
           "$printf_ok" \
           "$rtt_ms" \
@@ -463,7 +465,7 @@ DOC
           "$(human_bytes "$stats_tx_total")" \
           "$(human_bytes "$stats_rx_total")" >&2
       elif [ "$do_ping" -eq 1 ]; then
-        printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-11s  %-9s\n" \
+        printf "\r%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-11s  %-9s \033[K" \
           "$(date '+%F %T')" \
           "$printf_ok" \
           "$rtt_ms" \
@@ -473,7 +475,7 @@ DOC
           "${ping_ms:-"--"}" \
           "$speed_val" >&2
       else
-        printf "%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s\n" \
+        printf "\r%-19s  %-6s  %-6s  %-6s  %-8s  %-6s  %-9s \033[K" \
           "$(date '+%F %T')" \
           "$printf_ok" \
           "$rtt_ms" \
@@ -483,27 +485,28 @@ DOC
           "$speed_val" >&2
       fi
 
-      if [ "$show_speed" -eq 1 ]; then
-        if [ "$stats_warming" = "1" ]; then
-          printf '    stats: warming up（等待下一次采样以计算速率）\n' >&2
-        fi
-        if [ -n "$stats_note" ]; then
-          printf '    stats: %s\n' "$stats_note" >&2
-        fi
-      fi
+      # if [ "$show_speed" -eq 1 ]; then
+      #   if [ "$stats_warming" = "1" ]; then
+      #     printf '    stats: warming up（等待下一次采样以计算速率）\n' >&2
+      #   fi
+      #   if [ -n "$stats_note" ]; then
+      #     printf '    stats: %s\n' "$stats_note" >&2
+      #   fi
+      # fi
 
-      if [ "$show_logs" -eq 1 ] && [ ${#text_logs[@]} -gt 0 ]; then
-        monitor_render_logs_text "${text_logs[@]}"
-      fi
+      # if [ "$show_logs" -eq 1 ] && [ ${#text_logs[@]} -gt 0 ]; then
+      #   monitor_render_logs_text "${text_logs[@]}"
+      # fi
 
-      if (( total_cnt % 5 == 0 )); then
-        local rate=$(( ok_cnt*100/total_cnt ))
-        printf "%s[✓]%s 成功率：%d%%  （%d/%d）\n" "$C_GREEN" "$C_RESET" "$rate" "$ok_cnt" "$total_cnt" >&2
-        (_hr "$header_width") >&2
-      fi
+      # if (( total_cnt % 5 == 0 )); then
+      #   local rate=$(( ok_cnt*100/total_cnt ))
+      #   printf "%s[✓]%s 成功率：%d%%  （%d/%d）\n" "$C_GREEN" "$C_RESET" "$rate" "$ok_cnt" "$total_cnt" >&2
+      #   (_hr "$header_width") >&2
+      # fi
     fi
 
     if [ "$count" -gt 0 ] && [ "$total_cnt" -ge "$count" ]; then
+      printf '\n' >&2
       break
     fi
     sleep "$interval"

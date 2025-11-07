@@ -185,7 +185,7 @@ ssctl latency --json | jq
 | `ssctl monitor [name] [--interval S] [--tail] [--log] [--speed] [--json]` | 实时监控链路质量；`--speed` 依赖 `ss`/`nettop`，`--ping` 需 GNU ping，输出 NDJSON/表格并可追加日志 |
 | `ssctl log [name] [--follow] [--filter key=value] [--format json]` | 解析 CONNECT/UDP 目标，支持 target/ip/port/method/protocol/regex 过滤与 JSON 输出 |
 | `ssctl stats [name\|all] [--aggregate] [--format json] [--watch]` | 采集节点实时 TX/RX/TOTAL(B/s) 与累计量，依赖 `ss`/`nettop`；`--watch` 等价于 `monitor --speed` |
-| `ssctl probe|journal [name] [--url URL] [--json]` | 快速体检：校验端口监听、SOCKS5 HTTP 连通性、链路探测（仅链路/带 DNS），支持 JSON 输出 |
+| `ssctl probe\|journal [name] [--url URL] [--json]` | 快速体检：校验端口监听、SOCKS5 HTTP 连通性、链路探测（仅链路/带 DNS），支持 JSON 输出 |
 | `ssctl latency [--url URL] [--json]` | 对全部节点发起一次 TCP 握手测量，返回排序列表或 JSON 结果 |
 | `ssctl metrics [--format prom]` | 导出节点指标，支持 JSON / Prometheus |
 | `ssctl sub update [alias]` | 从订阅地址批量导入 `ss://` 链接（含插件参数解析） |
