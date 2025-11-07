@@ -230,4 +230,4 @@ ssctl latency --json | jq
 
 ## 许可
 
-本项目仍沿用原仓库的 License（如未指定，请根据上游协议补充）。
+本项目根据 MIT 许可证 (The MIT License) 授权。详情请见 `LICENSE` 文件。
