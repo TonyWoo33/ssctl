@@ -24,5 +24,5 @@ cmd_start(){
     rc=1
   fi
 
-  return $rc
+  return "$rc"
 }

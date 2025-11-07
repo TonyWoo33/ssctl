@@ -102,7 +102,10 @@ cmd_sub(){
 
         info "正在处理订阅: $alias"
         local encoded_list
-        encoded_list=$(curl -sS --max-time 20 "$url" || { warn "下载失败: $alias ($url)"; continue; })
+        if ! encoded_list=$(curl -sS --max-time 20 "$url"); then
+          warn "下载失败: $alias ($url)"
+          continue
+        fi
 
         local decoded_list
         decoded_list=$(urlsafe_b64_decode "$encoded_list")

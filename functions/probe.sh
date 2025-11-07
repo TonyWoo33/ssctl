@@ -87,19 +87,15 @@ DOC
     return 1
   fi
 
-  local port_ok=0 port_error=""
+  local port_ok=0
   if command -v nc >/dev/null 2>&1; then
     if nc -z "$laddr" "$lport" -w 2 2>/dev/null; then
       port_ok=1
-    else
-      port_error="port_unreachable"
     fi
   else
-    if (exec 3<>/dev/tcp/${laddr}/${lport}) 2>/dev/null; then
+    if (exec 3<>/dev/tcp/"${laddr}"/"${lport}") 2>/dev/null; then
       port_ok=1
       exec 3>&-
-    else
-      port_error="port_unreachable"
     fi
   fi
 

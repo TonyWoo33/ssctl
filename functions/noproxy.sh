@@ -11,5 +11,6 @@ cmd_noproxy(){
   fi
   ok "所有代理单元已停止。"
   printf '%s\n' "如需在当前 shell 关闭环境代理，请执行："
+  # shellcheck disable=SC2016
   printf '  %s\n' 'eval "$(ssctl env noproxy)"'
 }

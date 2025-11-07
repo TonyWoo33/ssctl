@@ -63,7 +63,8 @@ logs_parse_journal_line(){
 }
 
 logs_parse_file_line(){
-  local node="$1" line="$2" timestamp="" rest="$line"
+  local node="$1" line="$2" timestamp=""
+  local rest="$line"
   if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}[T[:space:]][0-9:.+-]+)[[:space:]]+(.*)$ ]]; then
     timestamp="${BASH_REMATCH[1]}"
     rest="${BASH_REMATCH[2]}"
@@ -93,8 +94,10 @@ logs_entry_matches(){
     [[ "$value" == *"${LOG_FILTER_IP}"* ]] || return 1
   fi
   if [ -n "${LOG_FILTER_PORT:-}" ]; then
-    local tport="$(jq -r '(.target_port|tostring) // ""' <<<"$entry")"
-    local sport="$(jq -r '(.source_port|tostring) // ""' <<<"$entry")"
+    local tport
+    tport="$(jq -r '(.target_port|tostring) // ""' <<<"$entry")"
+    local sport
+    sport="$(jq -r '(.source_port|tostring) // ""' <<<"$entry")"
     if [ "$tport" != "${LOG_FILTER_PORT}" ] && [ "$sport" != "${LOG_FILTER_PORT}" ]; then
       return 1
     fi
@@ -332,7 +335,7 @@ DOC
   fi
 
   unset LOG_FILTER_TARGET LOG_FILTER_IP LOG_FILTER_PORT LOG_FILTER_METHOD LOG_FILTER_PROTOCOL LOG_FILTER_REGEX
-  return $rc
+  return "$rc"
 }
 
 # Wrapper for log alias.

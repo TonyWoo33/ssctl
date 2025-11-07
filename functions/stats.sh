@@ -280,7 +280,7 @@ DOC
     epoch="$(date +%s)"
 
     local rows=() row aggregate_tx_rate=0 aggregate_rx_rate=0 aggregate_total_rate=0
-    local aggregate_tx_total=0 aggregate_rx_total=0 warming_any=0 valid_any=0
+    local aggregate_tx_total=0 aggregate_rx_total=0 warming_any=0
     local node_jsons=()
 
     for node in "${nodes[@]}"; do
@@ -293,7 +293,6 @@ DOC
         aggregate_total_rate=$(( aggregate_total_rate + total_rate ))
         aggregate_tx_total=$(( aggregate_tx_total + tx_total ))
         aggregate_rx_total=$(( aggregate_rx_total + rx_total ))
-        valid_any=1
       fi
       if [ "$warming" = "1" ]; then
         warming_any=1

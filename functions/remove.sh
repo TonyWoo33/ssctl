@@ -53,7 +53,8 @@ cmd_remove(){
 
   # 如 current 指向被删节点 → 解除指向
   if [ -L "${CURRENT_JSON}" ]; then
-    local cur="$(basename "$(readlink -f "${CURRENT_JSON}")" .json 2>/dev/null || true)"
+    local cur
+    cur="$(basename "$(readlink -f "${CURRENT_JSON}")" .json 2>/dev/null || true)"
     if [ "$cur" = "$name" ]; then
       rm -f "${CURRENT_JSON}"
       warn "current 指向已清空（原指向为：$name）"

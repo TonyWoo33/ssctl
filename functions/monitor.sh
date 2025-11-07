@@ -61,7 +61,8 @@ monitor_fetch_logs(){
 
   if [ ${#new_entries[@]} -gt 0 ]; then
     local last_entry="${new_entries[-1]}"
-    local last_entry_ts="$(jq -r '(.timestamp_unix // 0)' <<<"$last_entry")"
+    local last_entry_ts
+    last_entry_ts="$(jq -r '(.timestamp_unix // 0)' <<<"$last_entry")"
     if [ "$last_entry_ts" -gt 0 ] 2>/dev/null; then
       MONITOR_LOG_SINCE_TS=$(( last_entry_ts + 1 ))
     fi
@@ -257,8 +258,6 @@ DOC
   fi
 
   local ok_cnt=0 total_cnt=0
-  local socks_flag="--socks5-hostname"
-  [ "$nodns" -eq 1 ] && socks_flag="--socks5"
 
   local header_width=96
   if [ "$show_speed" -eq 1 ]; then
@@ -289,7 +288,7 @@ DOC
     (_hr "$header_width") >&2
   fi
 
-  local last_stats_epoch=0 last_stats_entry="" stats_row=""
+  local last_stats_epoch=0 last_stats_entry=""
   MONITOR_LOG_SINCE_TS=0
   MONITOR_LOG_KEYS=()
 
@@ -331,12 +330,15 @@ DOC
       fi
     fi
 
-    local speed_val="$(monitor_number_or_default "$spd" "0")"
-    local code_val="$(monitor_number_or_default "$code" "0")"
+    local speed_val
+    speed_val="$(monitor_number_or_default "$spd" "0")"
+    local code_val
+    code_val="$(monitor_number_or_default "$code" "0")"
 
     local stats_valid=0 stats_tx_rate=0 stats_rx_rate=0 stats_total_rate=0 stats_tx_total=0 stats_rx_total=0 stats_note="" stats_warming=0
     if [ "$show_speed" -eq 1 ]; then
-      local now_epoch="$(date +%s)"
+      local now_epoch
+      now_epoch="$(date +%s)"
       if [ "$last_stats_epoch" -eq 0 ] || [ $(( now_epoch - last_stats_epoch )) -ge "$stats_interval" ]; then
         last_stats_entry="$(stats_collect_node "$name" "$now_epoch" "$stats_cache_dir")"
         last_stats_epoch="$now_epoch"
@@ -363,11 +365,16 @@ DOC
         [ "$stats_valid" = "1" ] && stats_valid_num=1
         local stats_warming_num=0
         [ "$stats_warming" = "1" ] && stats_warming_num=1
-        local stats_tx_rate_num="$(monitor_number_or_default "$stats_tx_rate" "0")"
-        local stats_rx_rate_num="$(monitor_number_or_default "$stats_rx_rate" "0")"
-        local stats_total_rate_num="$(monitor_number_or_default "$stats_total_rate" "0")"
-        local stats_tx_total_num="$(monitor_number_or_default "$stats_tx_total" "0")"
-        local stats_rx_total_num="$(monitor_number_or_default "$stats_rx_total" "0")"
+        local stats_tx_rate_num
+        stats_tx_rate_num="$(monitor_number_or_default "$stats_tx_rate" "0")"
+        local stats_rx_rate_num
+        stats_rx_rate_num="$(monitor_number_or_default "$stats_rx_rate" "0")"
+        local stats_total_rate_num
+        stats_total_rate_num="$(monitor_number_or_default "$stats_total_rate" "0")"
+        local stats_tx_total_num
+        stats_tx_total_num="$(monitor_number_or_default "$stats_tx_total" "0")"
+        local stats_rx_total_num
+        stats_rx_total_num="$(monitor_number_or_default "$stats_rx_total" "0")"
         stats_json="$(jq -c -n \
           --argjson valid "$stats_valid_num" \
           --argjson tx_rate "$stats_tx_rate_num" \
@@ -380,17 +387,22 @@ DOC
           '{valid:($valid==1),tx_bytes_per_second:$tx_rate,rx_bytes_per_second:$rx_rate,total_bytes_per_second:$total_rate,tx_total_bytes:$tx_total,rx_total_bytes:$rx_total,warming_up:($warming==1)} | if ($note|length)>0 then . + {note:$note} else . end')"
       fi
 
-      local timestamp_iso="$(date --iso-8601=seconds)"
+      local timestamp_iso
+      timestamp_iso="$(date --iso-8601=seconds)"
       local ok_flag=0
       [ "$printf_ok" = "OK" ] && ok_flag=1
       local http_code_num=0
       if [[ "$code_val" =~ ^[0-9]+$ ]]; then
         http_code_num=$((10#$code_val))
       fi
-      local rtt_ms_num="$(monitor_number_or_default "$rtt_ms" "0")"
-      local ttfb_ms_num="$(monitor_number_or_default "$ttfb_ms" "0")"
-      local conn_ms_num="$(monitor_number_or_default "$conn_ms" "0")"
-      local curl_rate_num="$(monitor_number_or_default "$speed_val" "0")"
+      local rtt_ms_num
+      rtt_ms_num="$(monitor_number_or_default "$rtt_ms" "0")"
+      local ttfb_ms_num
+      ttfb_ms_num="$(monitor_number_or_default "$ttfb_ms" "0")"
+      local conn_ms_num
+      conn_ms_num="$(monitor_number_or_default "$conn_ms" "0")"
+      local curl_rate_num
+      curl_rate_num="$(monitor_number_or_default "$speed_val" "0")"
       local ping_ms_json="null"
       if [ -n "$ping_ms_value" ]; then
         ping_ms_json="$(monitor_number_or_default "$ping_ms_value" "0")"

@@ -7,15 +7,31 @@ init_dirs(){
 }
 
 engine_check(){
-  local engine="$1"
+  local engine="$1" binary_path="${2:-}"
+  if [ -z "$binary_path" ]; then
+    binary_path="$(engine_binary_path "$engine")"
+  fi
   case "$engine" in
     rust)
-      [ -x "${BIN_RUST_PATH}" ] || die "找不到 sslocal，请安装 shadowsocks-rust。"
+      [ -x "$binary_path" ] || die "找不到 sslocal，请安装 shadowsocks-rust。"
       ;;
     libev)
-      [ -x "${BIN_LIBEV_PATH}" ] || die "需要 shadowsocks-libev：未找到 ss-local。"
+      [ -x "$binary_path" ] || die "需要 shadowsocks-libev：未找到 ss-local。"
       ;;
   esac
+}
+
+engine_binary_path(){
+  local engine="$1" path=""
+  case "$engine" in
+    rust)
+      path="$(command -v "${BIN_RUST}" 2>/dev/null || true)"
+      ;;
+    libev)
+      path="$(command -v "${BIN_LIBEV}" 2>/dev/null || true)"
+      ;;
+  esac
+  printf '%s\n' "$path"
 }
 
 node_json_path(){
@@ -120,7 +136,9 @@ stop_all_units(){
     rm -f "${SYS_DIR}/${u}" 2>/dev/null || true
     echo " - stopped $u"
   done < <(systemctl --user list-unit-files 'sslocal-*' --no-legend | awk '{print $1}')
-  [ "$any" = 1 ] && systemctl --user daemon-reload || true
+  if [ "$any" = 1 ]; then
+    systemctl --user daemon-reload || true
+  fi
   set -e
 }
 
@@ -133,13 +151,8 @@ write_unit(){
 
   local lp; lp="$(json_get "$name" local_port)"; [ -n "$lp" ] || lp="${DEFAULT_LOCAL_PORT}"
   local engine; engine="$(pick_engine "$name")"
-  engine_check "$engine"
-
-  local exec_path=""
-  case "$engine" in
-    rust)  exec_path="${BIN_RUST_PATH}" ;;
-    libev) exec_path="${BIN_LIBEV_PATH}" ;;
-  esac
+  local exec_path; exec_path="$(engine_binary_path "$engine")"
+  engine_check "$engine" "$exec_path"
   if [ "$engine" = "libev" ] && [ ! -x "$exec_path" ]; then
     die "需要 shadowsocks-libev：未找到 ss-local。请先安装：sudo apt install -y shadowsocks-libev"
   fi
@@ -173,7 +186,8 @@ write_unit(){
   fi
 
   local log_level="${SSCTL_LOG_LEVEL:-info}"
-  local log_path="$(ssctl_default_log_path "$name")"
+  local log_path
+  log_path="$(ssctl_default_log_path "$name")"
   mkdir -p "$(dirname "$log_path")"
   touch "$log_path"
   chmod 600 "$log_path" 2>/dev/null || true

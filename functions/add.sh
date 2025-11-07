@@ -58,8 +58,8 @@ cmd_add(){
         fi
         decoded_cred="${decoded_cred//$'\r'/}"
 
-        local ss_method ss_password ss_server ss_port uri_plugin uri_plugin_opts uri_fragment
-        if ssctl_parse_ss_uri "$clipboard_content" ss_method ss_password ss_server ss_port uri_plugin uri_plugin_opts uri_fragment; then
+        local ss_method ss_password ss_server ss_port uri_plugin uri_plugin_opts
+        if ssctl_parse_ss_uri "$clipboard_content" ss_method ss_password ss_server ss_port uri_plugin uri_plugin_opts; then
             local target_lport="${lport:-$DEFAULT_LOCAL_PORT}"
             ssctl_build_node_json "$name" "$ss_server" "$ss_port" "$ss_method" "$ss_password" "$DEFAULT_LOCAL_ADDR" "$target_lport" "auto" "$uri_plugin" "$uri_plugin_opts" >"$dst" || die "写入失败：$dst"
             ok "已从剪贴板导入节点：$name"

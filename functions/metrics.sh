@@ -35,7 +35,8 @@ DOC
     *) die "未知输出格式：$format（支持 json|prom）" ;;
   esac
 
-  local timestamp="$(date --iso-8601=seconds)"
+  local timestamp
+  timestamp="$(date --iso-8601=seconds)"
   local total=0 active_count=0
   local default_laddr="$DEFAULT_LOCAL_ADDR"
 

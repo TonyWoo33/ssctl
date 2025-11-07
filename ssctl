@@ -8,24 +8,15 @@ shopt -s nullglob
 APP_NAME="ssctl"
 APP_VERSION="4.0.0"
 CONF_DIR="${HOME}/.config/shadowsocks-rust"
-NODES_DIR="${CONF_DIR}/nodes"
-CURRENT_JSON="${CONF_DIR}/current.json"
-SYS_DIR="${HOME}/.config/systemd/user"
+export NODES_DIR="${CONF_DIR}/nodes"
+export CURRENT_JSON="${CONF_DIR}/current.json"
+export SYS_DIR="${HOME}/.config/systemd/user"
 
-BIN_RUST="sslocal"      # shadowsocks-rust
-BIN_RUST_PATH=""
-BIN_LIBEV="ss-local"    # shadowsocks-libev
-BIN_LIBEV_PATH=""
-
-DEFAULT_LOCAL_ADDR="127.0.0.1"
-DEFAULT_LOCAL_PORT="1080"
-DEFAULT_PROBE_URL="https://www.google.com/generate_204"
-DEFAULT_LATENCY_URL="$DEFAULT_PROBE_URL"
-DEFAULT_MONITOR_URL="$DEFAULT_PROBE_URL"
-DEFAULT_MONITOR_NO_DNS_URL="http://1.1.1.1"
-DEFAULT_MONITOR_INTERVAL=5
-PROBE_IP_LOOKUP_URL="${SSCTL_PROBE_IP_URL:-https://ifconfig.me}"
-PROBE_COUNTRY_LOOKUP_URL="${SSCTL_PROBE_COUNTRY_URL:-https://ipinfo.io/country}"
+export DEFAULT_LOCAL_ADDR="127.0.0.1"
+export DEFAULT_LOCAL_PORT="1080"
+export DEFAULT_PROBE_URL="https://www.google.com/generate_204"
+export PROBE_IP_LOOKUP_URL="${SSCTL_PROBE_IP_URL:-https://ifconfig.me}"
+export PROBE_COUNTRY_LOOKUP_URL="${SSCTL_PROBE_COUNTRY_URL:-https://ipinfo.io/country}"
 
 # 等待端口监听（最多 N 秒）
 wait_listen(){
@@ -295,7 +286,6 @@ main(){
   esac
 }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-BIN_DIR="$SCRIPT_DIR"
 
 resolve_lib_dir(){
   if [ -n "${SSCTL_LIB_DIR:-}" ] && [ -d "${SSCTL_LIB_DIR}/functions" ]; then
@@ -356,6 +346,4 @@ self_check(){
     die "缺少依赖：${missing[*]}（可运行：${APP_NAME} doctor --install）"
   fi
   init_dirs
-  BIN_RUST_PATH="$(command -v "${BIN_RUST}" 2>/dev/null || true)"
-  BIN_LIBEV_PATH="$(command -v "${BIN_LIBEV}" 2>/dev/null || true)"
 }

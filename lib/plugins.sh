@@ -25,8 +25,9 @@ load_plugins(){
     unique_dirs+=("$resolved")
   }
 
-  for dir in "${LIB_DIR}/functions.d"; do
-    add_dir "$dir"
+  for f in "${LIB_DIR}/functions.d"/*; do
+    [ -e "$f" ] || continue
+    add_dir "$f"
   done
   add_dir "${HOME}/.config/ssctl/functions.d"
 

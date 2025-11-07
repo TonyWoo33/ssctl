@@ -20,13 +20,14 @@ CONFIG_DEFAULT_JSON='{
   }
 }'
 
-CONFIG_PATH=""
+export CONFIG_PATH=""
 CONFIG_DATA=""
-CONFIG_COLOR_MODE=""
+export CONFIG_COLOR_MODE=""
 CONFIG_PLUGIN_PATHS=()
-CONFIG_DOCTOR_INCLUDE_CLIPBOARD=1
-CONFIG_DOCTOR_INCLUDE_QRENCODE=1
-CONFIG_DOCTOR_INCLUDE_LIBEV=1
+export CONFIG_PLUGIN_PATHS
+export CONFIG_DOCTOR_INCLUDE_CLIPBOARD=1
+export CONFIG_DOCTOR_INCLUDE_QRENCODE=1
+export CONFIG_DOCTOR_INCLUDE_LIBEV=1
 
 load_config(){
   local specified_path="${1:-}"
@@ -39,9 +40,24 @@ load_config(){
     path="${CONFIG_PATH_DEFAULT}"
   fi
   CONFIG_PATH="$path"
+  export CONFIG_PATH
 
   if ! command -v jq >/dev/null 2>&1; then
     CONFIG_DATA="$CONFIG_DEFAULT_JSON"
+    CONFIG_COLOR_MODE=""
+    export CONFIG_COLOR_MODE
+    DEFAULT_PROBE_URL="https://www.google.com/generate_204"
+    export DEFAULT_PROBE_URL
+    DEFAULT_LATENCY_URL="$DEFAULT_PROBE_URL"
+    export DEFAULT_LATENCY_URL
+    DEFAULT_MONITOR_URL="$DEFAULT_PROBE_URL"
+    export DEFAULT_MONITOR_URL
+    DEFAULT_MONITOR_INTERVAL=5
+    export DEFAULT_MONITOR_INTERVAL
+    DEFAULT_MONITOR_NO_DNS_URL="http://1.1.1.1"
+    export DEFAULT_MONITOR_NO_DNS_URL
+    CONFIG_PLUGIN_PATHS=()
+    export CONFIG_PLUGIN_PATHS
     return 0
   fi
 
@@ -55,14 +71,23 @@ load_config(){
   fi
 
   CONFIG_COLOR_MODE="$(printf '%s' "$CONFIG_DATA" | jq -r '.color // empty')"
+  export CONFIG_COLOR_MODE
   DEFAULT_PROBE_URL="$(printf '%s' "$CONFIG_DATA" | jq -r '.probe.url')"
+  export DEFAULT_PROBE_URL
   DEFAULT_LATENCY_URL="$(printf '%s' "$CONFIG_DATA" | jq -r '.latency.url')"
+  export DEFAULT_LATENCY_URL
   DEFAULT_MONITOR_URL="$(printf '%s' "$CONFIG_DATA" | jq -r '.monitor.url')"
+  export DEFAULT_MONITOR_URL
   DEFAULT_MONITOR_INTERVAL="$(printf '%s' "$CONFIG_DATA" | jq -r '.monitor.interval')"
+  export DEFAULT_MONITOR_INTERVAL
   DEFAULT_MONITOR_NO_DNS_URL="$(printf '%s' "$CONFIG_DATA" | jq -r '.monitor.no_dns_url')"
+  export DEFAULT_MONITOR_NO_DNS_URL
   CONFIG_DOCTOR_INCLUDE_CLIPBOARD="$(printf '%s' "$CONFIG_DATA" | jq -r 'if .doctor.include_clipboard then 1 else 0 end')"
+  export CONFIG_DOCTOR_INCLUDE_CLIPBOARD
   CONFIG_DOCTOR_INCLUDE_QRENCODE="$(printf '%s' "$CONFIG_DATA" | jq -r 'if .doctor.include_qrencode then 1 else 0 end')"
+  export CONFIG_DOCTOR_INCLUDE_QRENCODE
   CONFIG_DOCTOR_INCLUDE_LIBEV="$(printf '%s' "$CONFIG_DATA" | jq -r 'if .doctor.include_libev then 1 else 0 end')"
+  export CONFIG_DOCTOR_INCLUDE_LIBEV
 
   CONFIG_PLUGIN_PATHS=()
   if mapfile -t CONFIG_PLUGIN_PATHS < <(printf '%s' "$CONFIG_DATA" | jq -r '.plugins.paths[]?' 2>/dev/null); then
@@ -70,6 +95,7 @@ load_config(){
   else
     CONFIG_PLUGIN_PATHS=()
   fi
+  export CONFIG_PLUGIN_PATHS
 }
 
 apply_config_color(){
@@ -87,6 +113,7 @@ apply_config_color(){
     esac
   fi
   apply_color_palette
+  export COLOR_FLAG
 }
 
 __SSCTL_ENV_LOADED=0
