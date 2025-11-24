@@ -262,7 +262,7 @@ ssctl_service_disable_now(){ __ssctl_service_call disable_now "$@"; }
 ssctl_service_link_and_enable(){ __ssctl_service_call link_and_enable "$@"; }
 ssctl_service_get_pid(){ __ssctl_service_call get_pid "$@"; }
 ssctl_service_unit_exists(){ __ssctl_service_call unit_exists "$@"; }
-ssctl_service_current_running_node(){ __ssctl_service_call current_running_node "$@"; }
-ssctl_service_stop_all_units(){ __ssctl_service_call stop_all_units "$@"; }
+ssctl_service_current_running_node(){ __ssctl_service_call current_running_node; }
+ssctl_service_stop_all_units(){ __ssctl_service_call stop_all_units; }
 ssctl_service_reset_failed_units(){ __ssctl_service_call reset_failed_units "$@"; }
 ssctl_service_show_status(){ __ssctl_service_call show_status "$@"; }
