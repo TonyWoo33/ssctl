@@ -1,16 +1,26 @@
 #!/usr/bin/env bash
 # ssctl - Shadowsocks control plane for user-level systemd
-# Version: 4.0.0
+# Version: 3.0.0
 
 set -Eeuo pipefail
 shopt -s nullglob
 
 APP_NAME="ssctl"
-APP_VERSION="4.0.0"
+APP_VERSION="3.2.0"
 CONF_DIR="${HOME}/.config/shadowsocks-rust"
 export NODES_DIR="${CONF_DIR}/nodes"
 export CURRENT_JSON="${CONF_DIR}/current.json"
 export SYS_DIR="${HOME}/.config/systemd/user"
+
+if [ -z "${SSCTL_SELF_PATH:-}" ]; then
+  case "$0" in
+    /*) SSCTL_SELF_PATH="$0" ;;
+    *)
+      SSCTL_SELF_PATH="$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)/$(basename "$0")"
+      ;;
+  esac
+  export SSCTL_SELF_PATH
+fi
 
 # Shadowsocks binary names
 export BIN_RUST="sslocal"      # shadowsocks-rust
@@ -64,7 +74,7 @@ short_usage(){
 
   start [name]  启动（含自检/单实例/自动生成 unit/启动后探测）
   stop  [name]  停止当前/指定节点
-  switch <name> 切换“当前节点”（仅切换，不启动）
+  switch <name>|--best 切换或自动择优“当前节点”（仅切换，不启动）
   list          用表格列出所有节点（RUN 状态/端口/算法/引擎/UNIT）
   show [name] [--qrcode]
               查看节点配置、状态或生成二维码
@@ -72,6 +82,7 @@ short_usage(){
   monitor [name] [--url URL] [--interval N] [--count M] [--no-dns]
               [--ping] [--format json|text] [--tail] [--log]
               [--speed] [--stats-interval S] [--filter key=value]
+              [--auto-switch] [--fail-threshold=N]
               实时监控：连通性/时延/速率/成功率，可选输出日志与速率
   stats [name|all] [--interval S] [--count N] [--aggregate] [--format text|json]
               采集实时上下行速率与累计量，可按节点或汇总输出
@@ -82,6 +93,9 @@ short_usage(){
   metrics [--format json|prom]
               输出节点状态指标（JSON 或 Prometheus）
   sub           管理订阅 (add, list, remove, update [--force])
+  probe [name] [--url URL] [--json]
+              Detect connectivity (ping/http) 并输出详情
+  current      Show currently active node info
 
   doctor [--install] [--dry-run] [--without-clipboard] [--without-qrcode]
          [--without-libev]
@@ -127,6 +141,8 @@ remove：
     --log 解析并输出最近 CONNECT/UDP 目标，可配合 --filter target=xxx
     --speed 输出 TX/RX/TOTAL(B/s) 与累计量；--stats-interval 单独控制采样周期
     --filter 支持 target/ip/port/method/protocol/regex（用于日志筛选）
+    --auto-switch 在连续失败达到阈值后自动执行 ssctl switch --best
+    --fail-threshold=N 设置触发 auto-switch 前允许的连续失败次数（默认 3）
     指标含义：
       OK/FAIL          是否连通（curl 返回码 & HTTP 状态）
       RTTms            time_total（ms）
@@ -264,7 +280,8 @@ main(){
     remove|rm)  cmd_remove "$@" ;;
     start)   cmd_start "${1:-}" ;;
     stop)    cmd_stop  "${1:-}" ;;
-    switch)  cmd_switch "${1:-}" ;;
+    switch)  cmd_switch "$@" ;;
+    current) cmd_current ;;
     list|ls) cmd_list ;;
     show|status) cmd_show "${1:-}" ;;
     monitor) cmd_monitor "$@" ;;
@@ -315,7 +332,15 @@ export SSCTL_LIB_DIR="$LIB_DIR"
 SCRIPT_DIR="$LIB_DIR"
 
 LIB_CORE_DIR="${LIB_DIR}/lib"
-for lib_file in common config systemd deps plugins utils init; do
+lib_common_path="${LIB_CORE_DIR}/common.sh"
+if [ ! -f "$lib_common_path" ]; then
+  printf '%s\n' "ssctl: 缺少库文件 ${lib_common_path}" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+. "$lib_common_path"
+
+for lib_file in config service sampler_utils deps plugins utils init; do
   lib_path="${LIB_CORE_DIR}/${lib_file}.sh"
   if [ ! -f "$lib_path" ]; then
     printf '%s\n' "ssctl: 缺少库文件 ${lib_path}" >&2
@@ -351,4 +376,6 @@ self_check(){
   init_dirs
 }
 
-main "$@" || true
+if [ "${SSCTL_SOURCE_ONLY:-0}" != "1" ]; then
+  main "$@" || true
+fi

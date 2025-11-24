@@ -53,8 +53,8 @@ cmd_show(){
     echo
 
     local unit; unit="$(unit_name_for "$target")"
-    if systemctl --user is-active --quiet "$unit"; then
-      systemctl --user status --no-pager "$unit" || true
+    if ssctl_service_is_active "$unit"; then
+      ssctl_service_show_status "$unit"
     else
       if unit_exists "$target"; then
         warn "服务未启动：$unit"

@@ -166,61 +166,6 @@ ssctl_measure_http(){
       "${url}" 2>/dev/null
 }
 
-# Retrieve the main PID for a node or unit. Uses systemd first and falls back to pgrep.
-# Optional third argument lets callers supply a known local_port to avoid extra config reads.
-ssctl_unit_pid(){
-    local name="$1" unit="$2" provided_port="${3:-}" pid="" cfg=""
-    [ -n "$name" ] || return 1
-    if [[ "$name" == *.service ]]; then
-        unit="$name"
-        name=""
-    elif [ -z "$unit" ] && command -v unit_name_for >/dev/null 2>&1; then
-        unit="$(unit_name_for "$name")"
-    fi
-
-    if [ -n "$unit" ] && command -v systemctl >/dev/null 2>&1; then
-        pid="$(systemctl --user show "$unit" -p MainPID --value 2>/dev/null | tr -d ' ' || true)"
-        case "$pid" in
-            ''|0) pid="" ;;
-        esac
-    fi
-
-    if [ -n "$pid" ]; then
-        printf '%s\n' "$pid"
-        return 0
-    fi
-
-    if [ -z "$name" ]; then
-        return 1
-    fi
-
-    if command -v node_json_path >/dev/null 2>&1; then
-        cfg="$(node_json_path "$name" 2>/dev/null || true)"
-    fi
-
-    local patterns=()
-    if [ -n "$cfg" ]; then
-        patterns+=("sslocal.*${cfg}" "ss-local.*${cfg}")
-    fi
-    local port="$provided_port"
-    if [ -z "$port" ] && command -v json_get >/dev/null 2>&1; then
-        port="$(json_get "$name" local_port 2>/dev/null || true)"
-        [ -n "$port" ] || port=""
-    fi
-    if [ -n "$port" ]; then
-        patterns+=("sslocal.*:${port}" "ss-local.*:${port}")
-    fi
-
-    if [ ${#patterns[@]} -gt 0 ] && command -v pgrep >/dev/null 2>&1; then
-        local pat
-        for pat in "${patterns[@]}"; do
-            pid="$(pgrep -f "$pat" 2>/dev/null | head -n1 || true)"
-            [ -n "$pid" ] && { printf '%s\n' "$pid"; return 0; }
-        done
-    fi
-    return 1
-}
-
 # Format bytes per second as integer text.
 format_rate(){
     local value="${1:-0}"

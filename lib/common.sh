@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-
 init_color_defaults(){
   SSCTL_COLOR_DEFAULT=1
   if [ ! -t 1 ]; then SSCTL_COLOR_DEFAULT=0; fi
@@ -30,6 +29,7 @@ apply_color_palette(){
 
 info(){ printf "%s[*]%s %s\n"   "$C_BLUE"  "$C_RESET" "$*" >&2; }
 ok(){   printf "%s[✓]%s %s\n"   "$C_GREEN" "$C_RESET" "$*" >&2; }
+success(){ ok "$@"; }
 warn(){ printf "%s[!]%s %s\n"   "$C_YELLOW" "$C_RESET" "$*" >&2; }
 err(){  printf "%s[✗]%s %s\n"   "$C_RED"   "$C_RESET" "$*" >&2; }
 error(){ err "$@"; }

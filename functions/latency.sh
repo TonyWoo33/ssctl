@@ -58,7 +58,7 @@ DOC
     die "未找到节点"
   fi
 
-  systemd_cache_unit_states 'sslocal-*.service'
+  ssctl_service_cache_unit_states
 
   local names=() latencies=() ok_flags=() errors=()
   while IFS= read -r node_json || [ -n "$node_json" ]; do
@@ -67,12 +67,12 @@ DOC
     name="$(jq -r '.__name' <<<"$node_json")"
     laddr="$(jq -r '.local_address // empty' <<<"$node_json")"; [ -n "$laddr" ] || laddr="$DEFAULT_LOCAL_ADDR"
     lport="$(jq -r '.local_port // empty' <<<"$node_json")";   [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
-    unit="sslocal-${name}-${lport}.service"
+    unit="$(unit_name_from_json "$node_json")"
 
-    if systemd_unit_active_cached "$unit"; then
+    if ssctl_service_is_active "$unit"; then
       unit_active=1
     else
-      unit_pid="$(ssctl_unit_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
+      unit_pid="$(ssctl_service_get_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
       [ -n "$unit_pid" ] && unit_active=1
     fi
 

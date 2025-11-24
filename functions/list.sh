@@ -12,9 +12,8 @@ cmd_list(){
   printf '%s' "$C_RESET"
   _hr "$TOTAL"
 
-  # Performance enhancement: Get all running units at once
-  local running_units
-  running_units=$(systemctl --user list-units --no-legend 'sslocal-*.service' 2>/dev/null | awk '$4=="running"{print $1}')
+  # Performance enhancement: Cache all running units at once
+  ssctl_service_cache_unit_states
 
   # Performance enhancement: Read all node data at once
   local node_files=("${NODES_DIR}"/*.json)
@@ -42,7 +41,7 @@ cmd_list(){
     eng=$(echo "$node_info" | jq -r '.eng')
     unit=$(unit_name_for "$n") # unit_name_for still calls jq once, but that is acceptable for now
     
-    if printf '%s\n' "$running_units" | grep -Fxq "$unit"; then
+    if ssctl_service_is_active "$unit"; then
       s="${C_GREEN}RUN${C_RESET}"
     fi
     

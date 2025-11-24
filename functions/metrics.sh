@@ -41,6 +41,7 @@ DOC
   local default_laddr="$DEFAULT_LOCAL_ADDR"
 
   local nodes_json="" comma=""
+  ssctl_service_cache_unit_states
 
   for n in $(list_nodes); do
     total=$((total+1))
@@ -49,7 +50,7 @@ DOC
     local has_unit=0
     local is_active=0
     if unit_exists "$n"; then has_unit=1; fi
-    if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+    if ssctl_service_is_active "$unit"; then
       is_active=1; active_count=$((active_count+1))
     fi
 

@@ -369,3 +369,21 @@ DOC
     return 1
   fi
 }
+
+ssctl_require_node_deps_met(){
+  local node_json="${1:-}"
+  [ -n "$node_json" ] || die "(ssctl_require_node_deps_met) 缺少节点 JSON 内容"
+
+  local node_name plugin_name
+  node_name="$(jq -r '.__name // .name // empty' <<<"$node_json" 2>/dev/null || true)"
+  [ -n "$node_name" ] || node_name="(unknown)"
+
+  plugin_name="$(jq -r '.plugin // ""' <<<"$node_json" 2>/dev/null || true)"
+  if [ -z "$plugin_name" ] || [ "$plugin_name" = "null" ]; then
+    return 0
+  fi
+
+  if ! command -v "$plugin_name" >/dev/null 2>&1; then
+    die "Dependency check failed for node '${node_name}': Plugin '${plugin_name}' is specified but not found in \$PATH."
+  fi
+}

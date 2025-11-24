@@ -2,6 +2,8 @@
 
 `ssctl` 是一个面向桌面与服务器用户的 Shadowsocks 控制平面脚本，基于 user-level systemd 实现节点的增删改查、单实例启动、日志/监控、订阅管理等功能。项目以 Bash 实现，支持 shadowsocks-rust (`sslocal`) 与 shadowsocks-libev (`ss-local`) 双引擎，可快速搭建本地代理环境。
 
+> 当前版本：**v3.2.0**
+
 ## 系统要求
 
 - **操作系统**：优先支持 GNU/Linux，要求 Bash ≥ 4、GNU coreutils（`date --iso-8601`）、user-level systemd。其他平台仅做有限验证。
@@ -19,6 +21,7 @@
 - **订阅同步**：解析 `ss://` 链接（含插件参数）并写入本地配置目录，支持批量更新。
 - **集中配置+插件**：支持 `~/.config/ssctl/config.json` 调整默认 URL/颜色/体检策略；可在 `functions.d/` 挂载自定义子命令。
 - **命令行体验**：内建颜色输出、Bash/Zsh 补全脚本、友好的错误提示。
+- **智能化故障转移 (v3.2.0)**：`ssctl switch --best` 会解析 `latency --json` 结果并选出延迟最低的可用节点；`ssctl monitor` 默认进入多节点 TUI，可启用 `--auto-switch --fail-threshold=N` 在 TUI 中自动切换。
 
 ## 安装与升级
 
@@ -34,7 +37,7 @@
    ```bash
    install -d ~/.local/bin ~/.local/share/ssctl
    install -m 755 ssctl ~/.local/bin/ssctl
-   cp -r functions lib ~/.local/share/ssctl/
+   cp -r functions lib protocols ~/.local/share/ssctl/
    install -m 644 ssctl-completion.sh ~/.local/share/ssctl/ssctl-completion.sh
    ```
 
@@ -108,6 +111,22 @@ ssctl latency --json | jq
 
 节点配置位于 `~/.config/shadowsocks-rust/nodes/<name>.json`，可直接编辑后使用 `ssctl show` 检查。
 
+## 智能化故障转移（v3.2.0）
+
+- `ssctl switch --best [--url URL]` 会自动调用 `ssctl latency --json`，过滤出 `ok:true` 且 RTT>0 的节点，并切换到延迟最低的候选。选择完成后会立即启动该节点，确保链路恢复无需人工干预。
+- `ssctl monitor` 现有两种模式：
+  - **多节点 TUI（默认）**：不带 `--name` 时进入全屏仪表盘，按 `q` 可退出。`--auto-switch --fail-threshold=N` 会在 TUI 行内标注 `[AUTO X/N]` 并在达到阈值时触发 `ssctl switch --best`。
+  - **单节点兼容模式**：带 `--name` 时保留 v3.0 时代的单行 `\r` 刷新输出，适合脚本和单节点调试。
+- `ssctl switch <name>` 仍维持“只更新 `current.json` 指向，不自动启动”的行为，便于在无人值守模式下与 `ssctl start` 或自动触发器配合使用。
+
+### Monitor 模式（TUI vs 单节点）
+
+- **TUI (默认)**：执行 `ssctl monitor`（不带 `--name`）时，会并发探测所有节点并使用 `tput` 渲染一个多行仪表盘。支持：
+  1. `q` 键随时退出。
+  2. `--auto-switch --fail-threshold=N`：在当前活跃节点行尾显示 `[AUTO X/N]`，并在连续 N 次失败后自动执行 `ssctl switch --best`。
+  3. `--log`/`--speed`/`--ping` 等选项仍然生效，输出写入 stderr（便于与 JSON 输出并存）。
+- **单节点模式**：当 `--name foo`（或传统写法 `ssctl monitor foo`）时，保留 v3.0 的单行 `\r` 刷新行为，便于脚本化或只关注单个节点的场景。
+
 ## 输出约定
 
 - **结构化数据**：所有 `--json` / `--format json` / NDJSON（如 `monitor` streaming）均只写入 `stdout`，便于直接通过 `jq`、`tee` 或日志采集器接入。
@@ -180,9 +199,10 @@ ssctl latency --json | jq
 | `ssctl doctor [--install] [--without-clipboard] [...]` | 检测依赖、systemd 环境，可选自动安装或跳过部分可选依赖 |
 | `ssctl add <name> ...` | 新建或导入节点；支持 `--from-file`、`--from-clipboard`、手动参数 |
 | `ssctl start [name]` | 单实例启动节点，自动更新 `current.json` 并执行连通性探测 |
+| `ssctl switch <name> \| --best [--url URL]` | `<name>` 仅切换 `current.json` 指向；`--best` 会解析 `latency --json`，过滤 `ok:true` 且 RTT>0 的节点，并自动启动延迟最低的候选 |
 | `ssctl stop [name]` | 停止节点并移除对应 systemd unit |
 | `ssctl list` | 表格列出所有节点及运行状态 |
-| `ssctl monitor [name] [--interval S] [--tail] [--log] [--speed] [--json]` | 实时监控链路质量；`--speed` 依赖 `ss`/`nettop`，`--ping` 需 GNU ping，输出 NDJSON/表格并可追加日志 |
+| `ssctl monitor [name] [--interval S] [--tail] [--log] [--speed] [--json] [--auto-switch] [--fail-threshold=N]` | 实时监控链路质量：不带 `--name` 时进入多节点 TUI（并发探测、`tput` 渲染、支持 `q` 退出、TUI 中显示 `--auto-switch` 计数并触发 `switch --best`）；带 `--name` 时保留单节点单行 `\r` 刷新模式；`--speed` 依赖 `ss`/`nettop`，`--ping` 需 GNU ping |
 | `ssctl log [name] [--follow] [--filter key=value] [--format json]` | 解析 CONNECT/UDP 目标，支持 target/ip/port/method/protocol/regex 过滤与 JSON 输出 |
 | `ssctl stats [name\|all] [--aggregate] [--format json] [--watch]` | 采集节点实时 TX/RX/TOTAL(B/s) 与累计量，依赖 `ss`/`nettop`；`--watch` 等价于 `monitor --speed` |
 | `ssctl probe\|journal [name] [--url URL] [--json]` | 快速体检：校验端口监听、SOCKS5 HTTP 连通性、链路探测（仅链路/带 DNS），支持 JSON 输出 |

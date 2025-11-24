@@ -9,98 +9,81 @@ stats_cache_dir(){
   printf '%s\n' "$dir"
 }
 
-stats_read_cache(){
-  local node="$1" cache_dir="$2" file
-  file="$cache_dir/${node}.cache"
-  if [ -r "$file" ]; then
-    read -r ts tx rx <"$file" || true
-    printf '%s %s %s\n' "${ts:-0}" "${tx:-0}" "${rx:-0}"
-    return 0
-  fi
-  printf '0 0 0\n'
-}
-
-stats_write_cache(){
-  local node="$1" cache_dir="$2" ts="$3" tx="$4" rx="$5"
-  local file="$cache_dir/${node}.cache"
-  printf '%s %s %s\n' "$ts" "$tx" "$rx" >"$file"
-}
-
 stats_collect_node(){
-  local node_json="$1" epoch="$2" cache_dir="$3"
-  local name lport unit pid metrics rc note="" valid=0 warming=0
-  local tx_bytes=0 rx_bytes=0 tx_rate=0 rx_rate=0 total_rate=0 rtt="-"
-
-  name="$(jq -r '.__name' <<<"$node_json")"
-  lport="$(jq -r '.local_port // empty' <<<"$node_json")"; [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
-  unit="sslocal-${name}-${lport}.service"
-
-  pid=""
-  local unit_active=0
-  if systemd_unit_active_cached "$unit"; then
-    unit_active=1
-  fi
-  pid="$(ssctl_unit_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
-  if [ "$unit_active" -eq 0 ] && [ -n "$pid" ]; then
-    unit_active=1
-  fi
-  if [ "$unit_active" -eq 0 ] || [ -z "$pid" ]; then
-    note="unit inactive或PID不可用"
-    echo "$name|0|0|0|0|0|0|$rtt|${pid:-0}|0|$note"
-    return 0
+  local node_json="${1:-}"
+  local now_epoch="${2:-0}"
+  local stats_cache_dir="${3:-}"
+  if [ -z "$node_json" ]; then
+    warn "stats_collect_node: 缺少 node_json 参数。"
+    return 1
   fi
 
-  local cache_prev prev_ts prev_tx prev_rx delta_tx delta_rx delta_t
-  cache_prev="$(stats_read_cache "$name" "$cache_dir")"
-  read -r prev_ts prev_tx prev_rx <<<"$cache_prev"
+  local engine
+  engine="$(jq -r '.engine // "shadowsocks"' <<<"$node_json")"
+  engine="${engine,,}"
+  require_safe_identifier "$engine" "engine 字段"
 
-  metrics="$(collect_proc_bytes "$pid" "$lport" 2>/dev/null)"
-  rc=$?
-  if [ $rc -ne 0 ]; then
-    if [ $rc -eq 3 ]; then
-      note="当前无活跃连接"
-      tx_bytes="$prev_tx"
-      rx_bytes="$prev_rx"
+  local app_lib_dir="${APP_LIB_DIR:-}"
+  if [ -z "$app_lib_dir" ]; then
+    if [ -n "${SSCTL_LIB_DIR:-}" ]; then
+      app_lib_dir="${SSCTL_LIB_DIR}/lib"
     else
-      case $rc in
-        2) note="缺少 ss/nettop 支持" ;;
-        4) note="解析网络统计失败" ;;
-        99) note="当前平台不支持采样" ;;
-        *) note="采样失败 (code=$rc)" ;;
-      esac
-      echo "$name|0|0|0|0|0|0|$rtt|$pid|0|$note"
-      return 0
+      local base_dir
+      base_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null || pwd)"
+      app_lib_dir="${base_dir}/lib"
     fi
   fi
 
-  if [ $rc -eq 0 ]; then
-    read -r tx_bytes rx_bytes <<<"$metrics"
-  fi
-  tx_bytes="${tx_bytes:-0}"
-  rx_bytes="${rx_bytes:-0}"
-
-  stats_write_cache "$name" "$cache_dir" "$epoch" "$tx_bytes" "$rx_bytes"
-
-  if [ "$prev_ts" -gt 0 ] && [ "$epoch" -gt "$prev_ts" ] && [ "$tx_bytes" -ge "$prev_tx" ] && [ "$rx_bytes" -ge "$prev_rx" ]; then
-    delta_tx=$(( tx_bytes - prev_tx ))
-    delta_rx=$(( rx_bytes - prev_rx ))
-    delta_t=$(( epoch - prev_ts ))
-    [ "$delta_t" -gt 0 ] || delta_t=1
-    tx_rate=$(( delta_tx / delta_t ))
-    rx_rate=$(( delta_rx / delta_t ))
-  else
-    warming=1
+  local engine_file="${app_lib_dir}/engines/${engine}.sh"
+  if [ ! -f "$engine_file" ]; then
+    warn "stats_collect_node: 找不到引擎文件: $engine_file"
+    return 1
   fi
 
-  total_rate=$(( tx_rate + rx_rate ))
-  valid=1
-  echo "$name|$valid|$tx_rate|$rx_rate|$total_rate|$tx_bytes|$rx_bytes|$rtt|$pid|$warming|$note"
+  local engine_config_func="engine_${engine}_get_sampler_config"
+  if ! declare -f "$engine_config_func" >/dev/null 2>&1; then
+    # shellcheck disable=SC1090
+    source "$engine_file"
+  fi
+  if ! declare -f "$engine_config_func" >/dev/null 2>&1; then
+    warn "stats_collect_node: 引擎 $engine 未实现 $engine_config_func"
+    return 1
+  fi
+
+  local sampler_config
+  sampler_config="$("$engine_config_func" "$node_json")"
+
+  local sampler_type
+  sampler_type="$(printf '%s\n' "$sampler_config" | awk -F= '$1=="SAMPLER_TYPE"{print $2; exit}')"
+  sampler_type="${sampler_type,,}"
+  if [ -z "$sampler_type" ]; then
+    warn "stats_collect_node: 引擎 $engine 未定义 SAMPLER_TYPE"
+    return 1
+  fi
+
+  local sampler_file="${app_lib_dir}/samplers/${sampler_type}.sh"
+  if [ ! -f "$sampler_file" ]; then
+    warn "stats_collect_node: 找不到采样器文件: $sampler_file"
+    return 1
+  fi
+
+  local sampler_func="sampler_${sampler_type}_collect"
+  if ! declare -f "$sampler_func" >/dev/null 2>&1; then
+    # shellcheck disable=SC1090
+    source "$sampler_file"
+  fi
+  if ! declare -f "$sampler_func" >/dev/null 2>&1; then
+    warn "stats_collect_node: 采样器 $sampler_type 未实现 $sampler_func"
+    return 1
+  fi
+
+  "$sampler_func" "$node_json" "$now_epoch" "$stats_cache_dir" "$sampler_config"
 }
 
 stats_run_watch_mode(){
   local args=("$@")
   local monitor_args=("--speed")
-  local i=0 arg
+  local i=0 arg name_provided=0
 
   while [ $i -lt ${#args[@]} ]; do
     arg="${args[i]}"
@@ -130,15 +113,18 @@ stats_run_watch_mode(){
         ;;
       --interval|--count|--stats-interval|--format|--url|--name)
         monitor_args+=("$arg")
+        [ "$arg" = "--name" ] && name_provided=1
         i=$((i + 1))
         if [ $i -lt ${#args[@]} ]; then
           monitor_args+=("${args[i]}")
+          [ "$arg" = "--name" ] && name_provided=1
           i=$((i + 1))
         fi
         continue
         ;;
       --interval=*|--count=*|--stats-interval=*|--format=*|--url=*|--name=*)
         monitor_args+=("$arg")
+        [[ "$arg" == --name=* ]] && name_provided=1
         i=$((i + 1))
         continue
         ;;
@@ -148,11 +134,20 @@ stats_run_watch_mode(){
         continue
         ;;
       *)
-        monitor_args+=("$arg")
+        if [[ "$arg" != -* ]] && [ $name_provided -eq 0 ]; then
+          monitor_args+=("--name" "$arg")
+          name_provided=1
+        else
+          monitor_args+=("$arg")
+        fi
         i=$((i + 1))
         ;;
     esac
   done
+
+  if [ $name_provided -eq 0 ]; then
+    monitor_args+=("--name" "current")
+  fi
 
   cmd_monitor "${monitor_args[@]}"
 }
@@ -300,7 +295,7 @@ DOC
     local aggregate_tx_total=0 aggregate_rx_total=0 warming_any=0
     local node_result_jsons=()
 
-    systemd_cache_unit_states 'sslocal-*.service'
+    ssctl_service_cache_unit_states
 
     local node_json
     for node_json in "${node_configs[@]}"; do

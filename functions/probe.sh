@@ -57,16 +57,21 @@ DOC
   name="$(resolve_name "${name:-}")"
   url="${url:-$DEFAULT_PROBE_URL}"
 
+  local node_json
+  node_json="$(jq -c --arg name "$name" '. + {__name:$name}' "$(node_json_path "$name")")"
+  ssctl_require_node_deps_met "$node_json"
+
   local laddr lport unit
   laddr="$(json_get "$name" local_address)"; [ -n "$laddr" ] || laddr="$DEFAULT_LOCAL_ADDR"
   lport="$(json_get "$name" local_port)";   [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
   unit="$(unit_name_for "$name")"
 
   local unit_active=0 unit_pid=""
-  if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+  ssctl_service_cache_unit_states "$unit"
+  if ssctl_service_is_active "$unit"; then
     unit_active=1
   else
-    unit_pid="$(ssctl_unit_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
+    unit_pid="$(ssctl_service_get_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
     if [ -n "$unit_pid" ]; then
       unit_active=1
     fi

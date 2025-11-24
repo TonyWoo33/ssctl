@@ -194,9 +194,9 @@ cmd_logs(){
     case "$1" in
       -f|--follow)
         follow=1; shift ;;
-      -n|--lines)
+      -n|--lines|--tail)
         lines="$2"; lines_set=1; shift 2 ;;
-      --lines=*)
+      --lines=*|--tail=*)
         lines="${1#*=}"; lines_set=1; shift ;;
       --since)
         since="$2"; shift 2 ;;

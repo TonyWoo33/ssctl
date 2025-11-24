@@ -84,12 +84,242 @@ monitor_render_logs_text(){
   done
 }
 
+monitor_resolve_unit_name(){
+  local name="$1" node_json="${2:-}" fallback_port="${3:-}"
+  local resolved=""
+  if declare -F unit_name_for >/dev/null 2>&1; then
+    resolved="$(unit_name_for "$name" 2>/dev/null || true)"
+  fi
+  if [ -z "$resolved" ] && [ -n "$node_json" ] && declare -F unit_name_from_json >/dev/null 2>&1; then
+    resolved="$(unit_name_from_json "$node_json" 2>/dev/null || true)"
+  fi
+  if [ -z "$resolved" ]; then
+    local port="$fallback_port"
+    [ -n "$port" ] || port="$DEFAULT_LOCAL_PORT"
+    resolved="sslocal-${name}-${port}.service"
+  fi
+  printf '%s\n' "$resolved"
+}
+
+monitor_collect_node_snapshot(){
+  local node_json="$1" url="$2" nodns="$3" do_ping="$4"
+
+  local name laddr lport server unit
+  name="$(jq -r '.__name' <<<"$node_json")"
+  [ -n "$name" ] || return 0
+  laddr="$(jq -r '.local_address // empty' <<<"$node_json")"; [ -n "$laddr" ] || laddr="$DEFAULT_LOCAL_ADDR"
+  lport="$(jq -r '.local_port // empty' <<<"$node_json")";   [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
+  server="$(jq -r '.server // empty' <<<"$node_json")"
+  unit="$(monitor_resolve_unit_name "$name" "$node_json" "$lport")"
+
+  local unit_active=0 unit_pid=""
+  if ssctl_service_is_active "$unit"; then
+    unit_active=1
+  else
+    unit_pid="$(ssctl_service_get_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
+    [ -n "$unit_pid" ] && unit_active=1
+  fi
+
+  if [ "$unit_active" -eq 0 ]; then
+    jq -c -n --arg name "$name" --arg unit "$unit" \
+      '{name:$name,unit:$unit,ok:false,http_code:0,latency_ms:null,ttfb_ms:null,connect_ms:null,curl_bytes_per_s:0,ping_ms:null,error:"unit_inactive"}'
+    return 0
+  fi
+
+  local socks_mode="hostname"
+  [ "$nodns" -eq 1 ] && socks_mode="ip"
+
+  local out rc=0
+  out="$(ssctl_measure_http "$laddr" "$lport" "$url" "$socks_mode")" || rc=$? || true
+  rc=${rc:-0}
+
+  local t_conn t_ttfb t_total spd code
+  t_conn="$(awk '{print $1}' <<<"$out")"
+  t_ttfb="$(awk '{print $2}' <<<"$out")"
+  t_total="$(awk '{print $3}' <<<"$out")"
+  spd="$(awk '{print $4}' <<<"$out")"
+  code="$(awk '{print $5}' <<<"$out")"
+
+  local ok_flag=false
+  if [ "$rc" -eq 0 ] && [ -n "$code" ] && [ "$code" != "000" ]; then
+    ok_flag=true
+  fi
+
+  local rtt_ms ttfb_ms conn_ms
+  rtt_ms="$(monitor_to_ms <<<"${t_total:-0}")"
+  ttfb_ms="$(monitor_to_ms <<<"${t_ttfb:-0}")"
+  conn_ms="$(monitor_to_ms <<<"${t_conn:-0}")"
+
+  local ping_ms_json="null"
+  if [ "$do_ping" -eq 1 ]; then
+    local ping_out
+    if ping_out=$(ping -c1 -W1 "$server" 2>/dev/null); then
+      local ping_val
+      ping_val="$(echo "$ping_out" | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')"
+      ping_ms_json="$(monitor_number_or_default "$ping_val" "0")"
+    fi
+  fi
+
+  jq -c -n \
+    --arg name "$name" \
+    --arg unit "$unit" \
+    --argjson ok "$ok_flag" \
+    --argjson http_code "$(monitor_number_or_default "$code" "0")" \
+    --argjson latency_ms "$(monitor_number_or_default "$rtt_ms" "0")" \
+    --argjson ttfb_ms "$(monitor_number_or_default "$ttfb_ms" "0")" \
+    --argjson connect_ms "$(monitor_number_or_default "$conn_ms" "0")" \
+    --argjson curl_bytes_per_s "$(monitor_number_or_default "$spd" "0")" \
+    --argjson ping_ms "$ping_ms_json" \
+    '{name:$name,unit:$unit,ok:$ok,http_code:$http_code,latency_ms:$latency_ms,ttfb_ms:$ttfb_ms,connect_ms:$connect_ms,curl_bytes_per_s:$curl_bytes_per_s,ping_ms:(if ($ping_ms|type)=="number" then $ping_ms else null end)}'
+}
+
+monitor_render_tui_header(){
+  printf 'MULTI NODE MONITOR (interval=%ss)\n' "$1" >&2
+  printf "%-18s %-6s %-8s %-8s %-8s %-8s %-11s %-14s\n" "NAME" "OK" "RTTms" "TTFBms" "CONNms" "CODE" "SPEED(B/s)" "AUTO" >&2
+  (_hr 106) >&2
+}
+
+monitor_render_tui_row(){
+  local json="$1" note="${2:--}"
+  local name latency ttfb conn code speed_val ok_flag ok_text="FAIL"
+  name="$(jq -r '.name' <<<"$json")"
+  latency="$(jq -r '.latency_ms // "--"' <<<"$json")"
+  ttfb="$(jq -r '.ttfb_ms // "--"' <<<"$json")"
+  conn="$(jq -r '.connect_ms // "--"' <<<"$json")"
+  code="$(jq -r '.http_code // 0' <<<"$json")"
+  speed_val="$(jq -r '.curl_bytes_per_s // 0' <<<"$json")"
+  ok_flag="$(jq -r '.ok' <<<"$json")"
+  [ "$ok_flag" = "true" ] && ok_text="OK"
+  printf "%-18s %-6s %-8s %-8s %-8s %-8s %-11s %-14s\n" "$name" "$ok_text" "$latency" "$ttfb" "$conn" "$code" "$speed_val" "$note" >&2
+}
+
+run_multi_node_tui_mode(){
+  local url="$1" interval="$2" count="$3" nodns="$4" output_format="$5" do_ping="$6" auto_switch="$7" fail_threshold="$8"
+  local nodes=()
+  while read -r node; do
+    [ -n "$node" ] || continue
+    nodes+=("$node")
+  done < <(list_nodes)
+  [ ${#nodes[@]} -gt 0 ] || die "未找到任何节点"
+
+  tput clear >/dev/null 2>&1 || printf '\033[2J'
+  local loops=0
+  local restore_cursor=0
+  if [ "$output_format" = "text" ]; then
+    if tput civis >/dev/null 2>&1; then
+      restore_cursor=1
+    fi
+  fi
+  local consecutive_failures=0 auto_switch_target_name=""
+  while :; do
+    loops=$((loops + 1))
+    local tmpdir
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/ssctl-monitor.XXXX")"
+
+    ssctl_service_cache_unit_states
+    local node_jsons=()
+    if ! mapfile -t node_jsons < <(nodes_json_stream "${nodes[@]}"); then
+      rm -rf "$tmpdir"
+      die "无法读取节点配置"
+    fi
+    local node_json node_name
+    if [ "$auto_switch" = "true" ]; then
+      auto_switch_target_name=""
+      for node_json in "${node_jsons[@]}"; do
+        node_name="$(jq -r '.__name' <<<"$node_json")"
+        [ -n "$node_name" ] || continue
+        local unit
+        unit="$(unit_name_for "$node_name")"
+        if ssctl_service_is_active "$unit"; then
+          auto_switch_target_name="$node_name"
+          break
+        fi
+      done
+      if [ -z "$auto_switch_target_name" ]; then
+        consecutive_failures=0
+      fi
+    fi
+    for node_json in "${node_jsons[@]}"; do
+      node_name="$(jq -r '.__name' <<<"$node_json")"
+      [ -n "$node_name" ] || continue
+      monitor_collect_node_snapshot "$node_json" "$url" "$nodns" "$do_ping" >"${tmpdir}/${node_name}.json" &
+    done
+    wait || true
+
+    if [ "$auto_switch" = "true" ] && [ -n "$auto_switch_target_name" ]; then
+      local target_file="${tmpdir}/${auto_switch_target_name}.json"
+      local target_ok="false" target_latency=0
+      if [ -f "$target_file" ]; then
+        target_ok="$(jq -r '.ok' "$target_file")"
+        target_latency="$(jq -r '.latency_ms // 0' "$target_file")"
+      fi
+      if [ "$target_ok" = "true" ] && [ "${target_latency:-0}" -gt 0 ]; then
+        consecutive_failures=0
+      else
+        consecutive_failures=$((consecutive_failures + 1))
+      fi
+      if [ "$consecutive_failures" -ge "$fail_threshold" ]; then
+        warn "自动切换: 达到失败阈值(${fail_threshold})，正在触发 'ssctl switch --best'..."
+        if ssctl switch --best >/dev/null 2>&1; then
+          info "自动切换: 切换完成。"
+        else
+          warn "自动切换: 执行 'ssctl switch --best' 失败，请检查日志。"
+        fi
+        consecutive_failures=0
+      fi
+    elif [ "$auto_switch" = "true" ]; then
+      consecutive_failures=0
+    fi
+
+    if [ "$output_format" = "json" ]; then
+      jq -s '.' "${tmpdir}/"*.json
+    else
+      tput cup 0 0 >/dev/null 2>&1 || printf '\033[H'
+      monitor_render_tui_header "$interval"
+      local node
+      for node in "${nodes[@]}"; do
+        if [ -f "${tmpdir}/${node}.json" ]; then
+          local row_note="-"
+          if [ "$auto_switch" = "true" ] && [ -n "$auto_switch_target_name" ] && [ "$node" = "$auto_switch_target_name" ]; then
+            row_note="[AUTO ${consecutive_failures}/${fail_threshold}]"
+          fi
+          monitor_render_tui_row "$(cat "${tmpdir}/${node}.json")" "$row_note"
+        fi
+      done
+    fi
+
+    rm -rf "$tmpdir"
+    if [ "$count" -gt 0 ] && [ "$loops" -ge "$count" ]; then
+      break
+    fi
+
+    local quit_requested=0
+    if [ "$output_format" = "text" ]; then
+      local key=""
+      if read -rs -n 1 -t 0.1 key 2>/dev/null; then
+        case "$key" in
+          q|Q) quit_requested=1 ;;
+        esac
+      fi
+    fi
+    if [ "$quit_requested" -eq 1 ]; then
+      break
+    fi
+    sleep "$interval"
+  done
+
+  if [ "$output_format" = "text" ] && [ "$restore_cursor" -eq 1 ]; then
+    tput cnorm >/dev/null 2>&1 || true
+  fi
+}
+
 cmd_monitor(){
   self_check
   ssctl_read_config
 
   local name="" url="" interval="$DEFAULT_MONITOR_INTERVAL" count=0 tail=0 nodns=0
   local output_format="text" do_ping=0 show_logs=0 show_speed=0 stats_interval="" log_limit=5
+  local auto_switch="false" fail_threshold=3
   local filter_args=()
   local show_help=0
 
@@ -115,6 +345,8 @@ cmd_monitor(){
       --format)     output_format="$2"; shift 2 ;;
       --format=*)   output_format="${1#*=}"; shift ;;
       --json)       output_format="json"; shift ;;
+      --auto-switch) auto_switch="true"; shift ;;
+      --fail-threshold=*) fail_threshold="${1#*=}"; shift ;;
       -h|--help)    show_help=1; shift ;;
       --)           shift; break ;;
       -* )
@@ -129,12 +361,15 @@ cmd_monitor(){
 用法：ssctl monitor [name] [--interval S] [--count N] [--log] [--speed]
                   [--stats-interval S] [--tail] [--filter key=value]
                   [--format text|json] [--ping] [--no-dns]
+                  [--auto-switch] [--fail-threshold=N]
 说明：
   --log            捕获 CONNECT/UDP 目标，可配合 target/ip/port/method/protocol/regex 过滤。
   --speed          输出 Shadowsocks 进程的 TX/RX/TOTAL(B/s) 与累计量；可用 --stats-interval 单独控制采样周期。
   --tail           循环刷新输出；默认每 interval 秒采样。
   --format json    输出结构化字段，包含日志数组与速率细节。
   --no-dns         使用 --socks5 与裸 IP 仅测链路连通性。
+  --auto-switch    探测连续失败达到阈值时自动执行 ssctl switch --best。
+  --fail-threshold 设置 auto-switch 触发前允许的连续失败次数（默认 3）。
 DOC
     return 0
   fi
@@ -148,26 +383,8 @@ DOC
     *) die "未知输出格式：$output_format" ;;
   esac
 
-  if [ -z "$name" ]; then
-    name="$(resolve_name "")"
-  else
-    name="$(resolve_name "$name")"
-  fi
-
-  # if [ "$show_logs" -eq 0 ] && [ "$tail" -eq 1 ]; then
-  #   show_logs=1
-  # fi
-
-  if [ -z "$stats_interval" ]; then
-    stats_interval="$interval"
-  fi
-
-  if [ "$tail" -eq 1 ] && [ "$show_logs" -eq 1 ]; then
-    log_limit=10
-  fi
-
-  if [ "$tail" -eq 0 ] && [ "$count" -eq 0 ]; then
-    count=1
+  if ! [[ "$fail_threshold" =~ ^[0-9]+$ ]] || [ "$fail_threshold" -le 0 ]; then
+    die "--fail-threshold 需要一个正整数（默认 3）"
   fi
 
   if [ "$show_logs" -eq 1 ] && [ "${SSCTL_MONITOR_LOG_ENABLED:-true}" = "false" ]; then
@@ -186,25 +403,73 @@ DOC
     url="${url:-$DEFAULT_MONITOR_URL}"
   fi
 
-  local laddr lport unit server
+  if [ "$do_ping" -eq 1 ] && ! command -v ping >/dev/null 2>&1; then
+    warn "未检测到 ping，已跳过 --ping 检测。"
+    do_ping=0
+  fi
+
+  if [ -z "$name" ]; then
+    if [ "$count" -eq 0 ]; then
+      tail=1
+    fi
+    run_multi_node_tui_mode "$url" "$interval" "$count" "$nodns" "$output_format" "$do_ping" "$auto_switch" "$fail_threshold"
+    return 0
+  fi
+
+  if [ -z "$stats_interval" ]; then
+    stats_interval="$interval"
+  fi
+
+  if [ "$tail" -eq 1 ] && [ "$show_logs" -eq 1 ]; then
+    log_limit=10
+  fi
+
+  if [ "$tail" -eq 0 ] && [ "$count" -eq 0 ]; then
+    count=1
+  fi
+
+  name="$(resolve_name "$name")"
+  local monitor_node_json
+  monitor_node_json="$(jq -c --arg name "$name" '. + {__name:$name}' "$(node_json_path "$name")")"
+  ssctl_require_node_deps_met "$monitor_node_json"
+  run_single_node_monitor_mode "$name" "$url" "$interval" "$count" "$tail" "$nodns" "$output_format" "$do_ping" "$show_logs" "$show_speed" "$stats_interval" "$log_limit" "$auto_switch" "$fail_threshold" "${filter_args[@]}"
+}
+
+run_single_node_monitor_mode(){
+  local name="$1" url="$2" interval="$3" count="$4" tail="$5" nodns="$6" output_format="$7"
+  local do_ping="$8" show_logs="$9" show_speed="${10}" stats_interval="${11}" log_limit="${12}" auto_switch="${13}" fail_threshold="${14}"
+  shift 14 || true
+  local filter_args=("$@")
+
+  if [ -z "$stats_interval" ]; then
+    stats_interval="$interval"
+  fi
+
+  if [ "$tail" -eq 1 ] && [ "$show_logs" -eq 1 ]; then
+    log_limit=10
+  fi
+
+  if [ "$tail" -eq 0 ] && [ "$count" -eq 0 ]; then
+    count=1
+  fi
+
   local node_json=""
   node_json="$(nodes_json_stream "$name")"
   [ -n "$node_json" ] || die "无法读取节点配置：$name"
 
+  local laddr lport server unit
   laddr="$(jq -r '.local_address // empty' <<<"$node_json")"; [ -n "$laddr" ] || laddr="$DEFAULT_LOCAL_ADDR"
   lport="$(jq -r '.local_port // empty' <<<"$node_json")";   [ -n "$lport" ] || lport="$DEFAULT_LOCAL_PORT"
   server="$(jq -r '.server // empty' <<<"$node_json")"
-  unit="sslocal-${name}-${lport}.service"
+  unit="$(monitor_resolve_unit_name "$name" "$node_json" "$lport")"
 
   local unit_active=0 unit_pid=""
-  systemd_cache_unit_states 'sslocal-*.service'
-  if systemd_unit_active_cached "$unit"; then
+  ssctl_service_cache_unit_states
+  if ssctl_service_is_active "$unit"; then
     unit_active=1
   else
-    unit_pid="$(ssctl_unit_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
-    if [ -n "$unit_pid" ]; then
-      unit_active=1
-    fi
+    unit_pid="$(ssctl_service_get_pid "$name" "$unit" "$lport" 2>/dev/null || true)"
+    [ -n "$unit_pid" ] && unit_active=1
   fi
 
   if [ "$unit_active" -eq 0 ]; then
@@ -215,11 +480,6 @@ DOC
       warn "可先运行：ssctl start ${name}"
     fi
     return 1
-  fi
-
-  if [ "$do_ping" -eq 1 ] && ! command -v ping >/dev/null 2>&1; then
-    warn "未检测到 ping，已跳过 --ping 检测。"
-    do_ping=0
   fi
 
   local stats_cache_dir=""
@@ -296,6 +556,7 @@ DOC
   local last_stats_epoch=0 last_stats_entry=""
   MONITOR_LOG_SINCE_TS=0
   MONITOR_LOG_KEYS=()
+  local consecutive_failures=0
 
   while :; do
     total_cnt=$(( total_cnt + 1 ))
@@ -313,9 +574,32 @@ DOC
     code="$(awk '{print $5}' <<<"$out")"
 
     local printf_ok="FAIL"
+    local monitor_success=0
     if [ "$rc" -eq 0 ] && [ -n "$code" ] && [ "$code" != "000" ]; then
       printf_ok="OK"
       ok_cnt=$(( ok_cnt + 1 ))
+      monitor_success=1
+    fi
+
+    if [ "$auto_switch" = "true" ]; then
+      if [ "$monitor_success" -eq 1 ]; then
+        if [ "$consecutive_failures" -gt 0 ]; then
+          info "自动切换: 探测恢复正常。"
+        fi
+        consecutive_failures=0
+      else
+        consecutive_failures=$(( consecutive_failures + 1 ))
+        warn "自动切换: 探测失败 (${consecutive_failures}/${fail_threshold})..."
+        if [ "$consecutive_failures" -ge "$fail_threshold" ]; then
+          warn "自动切换: 达到失败阈值(${fail_threshold})。正在触发 'ssctl switch --best'..."
+          if ssctl switch --best >/dev/null 2>&1; then
+            info "自动切换: 切换完成。将继续监控新节点..."
+          else
+            warn "自动切换: 执行 'ssctl switch --best' 失败，请检查日志。"
+          fi
+          consecutive_failures=0
+        fi
+      fi
     fi
 
     local rtt_ms ttfb_ms conn_ms
@@ -345,8 +629,7 @@ DOC
       local now_epoch
       now_epoch="$(date +%s)"
       if [ "$last_stats_epoch" -eq 0 ] || [ $(( now_epoch - last_stats_epoch )) -ge "$stats_interval" ]; then
-        #关键修复：在采集数据前，刷新 systemd 状态缓存
-        systemd_cache_unit_states 'sslocal-*.service'
+        ssctl_service_cache_unit_states
         last_stats_entry="$(stats_collect_node "$node_json" "$now_epoch" "$stats_cache_dir")"
         last_stats_epoch="$now_epoch"
       fi
@@ -485,24 +768,24 @@ DOC
           "$speed_val" >&2
       fi
 
-      # if [ "$show_speed" -eq 1 ]; then
-      #   if [ "$stats_warming" = "1" ]; then
-      #     printf '    stats: warming up（等待下一次采样以计算速率）\n' >&2
-      #   fi
-      #   if [ -n "$stats_note" ]; then
-      #     printf '    stats: %s\n' "$stats_note" >&2
-      #   fi
-      # fi
+      if [ "$show_speed" -eq 1 ]; then
+        if [ "$stats_warming" = "1" ]; then
+          printf '\n    stats: warming up（等待下一次采样以计算速率）\n' >&2
+        fi
+        if [ -n "$stats_note" ]; then
+          printf '    stats: %s\n' "$stats_note" >&2
+        fi
+      fi
 
-      # if [ "$show_logs" -eq 1 ] && [ ${#text_logs[@]} -gt 0 ]; then
-      #   monitor_render_logs_text "${text_logs[@]}"
-      # fi
+      if [ "$show_logs" -eq 1 ] && [ ${#text_logs[@]} -gt 0 ]; then
+        monitor_render_logs_text "${text_logs[@]}"
+      fi
 
-      # if (( total_cnt % 5 == 0 )); then
-      #   local rate=$(( ok_cnt*100/total_cnt ))
-      #   printf "%s[✓]%s 成功率：%d%%  （%d/%d）\n" "$C_GREEN" "$C_RESET" "$rate" "$ok_cnt" "$total_cnt" >&2
-      #   (_hr "$header_width") >&2
-      # fi
+      if (( total_cnt % 5 == 0 )); then
+        local rate=$(( ok_cnt*100/total_cnt ))
+        printf "%s[✓]%s 成功率：%d%%  （%d/%d）\n" "$C_GREEN" "$C_RESET" "$rate" "$ok_cnt" "$total_cnt" >&2
+        (_hr "$header_width") >&2
+      fi
     fi
 
     if [ "$count" -gt 0 ] && [ "$total_cnt" -ge "$count" ]; then
