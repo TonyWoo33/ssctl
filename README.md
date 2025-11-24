@@ -79,8 +79,11 @@
 5. 在 `~/.bashrc` 或 `~/.zshrc` 中启用补全：
 
    ```bash
-   source ~/.local/share/ssctl/ssctl-completion.sh
+   echo 'source ~/.local/share/ssctl/ssctl-completion.sh' >> ~/.bashrc
+   source ~/.bashrc
    ```
+
+   若使用 zsh，可改为 `~/.zshrc`。
 
 > **提示**  
 > `ssctl` 会使用 `~/.config/shadowsocks-rust/nodes` 作为节点存储目录，并在 `~/.config/systemd/user` 写入 user-level unit 文件。确保系统启用了 user-level systemd (`loginctl enable-linger $USER`)。

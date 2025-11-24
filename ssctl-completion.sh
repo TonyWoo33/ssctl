@@ -1,144 +1,89 @@
 #!/usr/bin/env bash
-# Bash/Zsh completion for ssctl
 
-__ssctl_node_candidates(){
-    local dir="${HOME}/.config/shadowsocks-rust/nodes"
-    local entries=()
-    if [ -d "$dir" ]; then
-        while IFS= read -r file; do
-            local base="${file##*/}"
-            base="${base%.json}"
-            case "$base" in
-                _libev_*) continue ;;
-            esac
-            entries+=("$base")
-        done < <(find "$dir" -maxdepth 1 -type f -name '*.json' -print 2>/dev/null | sort)
-    fi
-    printf '%s\n' "${entries[@]}"
-}
-
-__ssctl_sub_aliases(){
-    local file="${HOME}/.config/shadowsocks-rust/subscriptions.json"
-    if [ -r "$file" ] && command -v jq >/dev/null 2>&1; then
-        jq -r '.[].alias' "$file" 2>/dev/null
-    fi
-}
-
-_ssctl_completions(){
-    local cur prev cmd
+_ssctl_completions() {
+    local cur prev commands
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local commands="add remove start stop switch list show monitor stats logs clear env noproxy latency test sub doctor probe check journal help metrics"
-    local global_opts="--config --color --no-color --help --version"
+    commands="start stop restart monitor stats latency probe add remove list logs log update doctor sub help version env clear current switch noproxy"  
 
-    if [ "$prev" = "--config" ]; then
-        COMPREPLY=($(compgen -f -- "$cur"))
-        return
-    fi
+    _ssctl_list_nodes() {
+        local node_dir="${HOME}/.config/shadowsocks-rust/nodes"
+        if [ -d "$node_dir" ]; then
+            find "$node_dir" -maxdepth 1 -name "*.json" -printf "%f\n" 2>/dev/null | sed 's/\.json$//'
+        fi
+    }
 
-    if [ "$prev" = "--color" ]; then
-        COMPREPLY=($(compgen -W "auto on off" -- "$cur"))
-        return
-    fi
-
-    cmd=""
-    local i=1
-    while [ $i -lt ${#COMP_WORDS[@]} ]; do
-        local word="${COMP_WORDS[$i]}"
-        case "$word" in
-            --config)
-                i=$((i+2))
-                continue
-                ;;
-            --color)
-                i=$((i+2))
-                continue
-                ;;
-            --color=*|--no-color|-h|--help|-v|--version)
-                i=$((i+1))
-                continue
-                ;;
-            --)
-                if [ $i -lt $(( ${#COMP_WORDS[@]} - 1 )) ]; then
-                    cmd="${COMP_WORDS[$((i+1))]}"
-                fi
-                break
-                ;;
-            -* )
-                i=$((i+1))
-                continue
-                ;;
-            *)
-                cmd="$word"
-                break
-                ;;
-        esac
-    done
-
-    if [ -z "$cmd" ]; then
-        COMPREPLY=($(compgen -W "$commands $global_opts" -- "$cur"))
-        return
-    fi
-
-    case "$cmd" in
-        add)
-            ;;
-        remove|start|stop|switch|show|monitor|stats|logs|probe|check|journal)
-            COMPREPLY=($(compgen -W "$(__ssctl_node_candidates)" -- "$cur"))
-            return
-            ;;
-        env)
-            if [ "$COMP_CWORD" -eq 2 ]; then
-                COMPREPLY=($(compgen -W "proxy noproxy off" -- "$cur"))
-                return
-            elif [ "$COMP_CWORD" -eq 3 ] && [[ "${COMP_WORDS[2]}" == "proxy" ]]; then
-                COMPREPLY=($(compgen -W "$(__ssctl_node_candidates)" -- "$cur"))
-                return
-            fi
-            ;;
-        sub)
-            if [ "$COMP_CWORD" -eq 2 ]; then
-                COMPREPLY=($(compgen -W "add list remove update" -- "$cur"))
-                return
-            fi
-            case "${COMP_WORDS[2]}" in
-                remove|update)
-                    COMPREPLY=($(compgen -W "$(__ssctl_sub_aliases)" -- "$cur"))
-                    return
-                    ;;
-            esac
-            ;;
-        doctor)
-            COMPREPLY=($(compgen -W "--install --dry-run --without-clipboard --with-clipboard --without-qrcode --with-qrcode --without-libev --with-libev -i -h --help" -- "$cur"))
-            return
+    case "${prev}" in
+        ssctl)
+            COMPREPLY=( $(compgen -W "${commands}" -- ${cur}) )
+            return 0
             ;;
         monitor)
-            COMPREPLY=($(compgen -W "--url --interval --count --tail --no-dns --ping --format --json --log --speed --stats-interval --filter" -- "$cur"))
-            return
+            local monitor_opts="--name --interval --count --tail --log --speed --stats-interval --filter --no-dns --ping --format --json --auto-switch --fail-threshold"
+            if [[ ${cur} == -* ]]; then
+                COMPREPLY=( $(compgen -W "${monitor_opts}" -- ${cur}) )
+            else
+                COMPREPLY=( $(compgen -W "$(_ssctl_list_nodes) ${monitor_opts}" -- ${cur}) )
+            fi
+            return 0
             ;;
         stats)
-            COMPREPLY=($(compgen -W "--interval --count --aggregate --format --filter --watch" -- "$cur"))
-            return
+            local stats_opts="--aggregate --format --watch --interval --json"
+            if [[ ${cur} == -* ]]; then
+                COMPREPLY=( $(compgen -W "${stats_opts}" -- ${cur}) )
+            else
+                COMPREPLY=( $(compgen -W "$(_ssctl_list_nodes) ${stats_opts}" -- ${cur}) )
+            fi
+            return 0
             ;;
-        logs)
-            COMPREPLY=($(compgen -W "--format --json -f --follow -n --lines --since --until --filter --raw" -- "$cur"))
-            return
+        logs|log)
+            local logs_opts="--follow -f --lines --tail -n --filter --since --until --format --raw"
+            if [[ ${cur} == -* ]]; then
+                COMPREPLY=( $(compgen -W "${logs_opts}" -- ${cur}) )
+            else
+                COMPREPLY=( $(compgen -W "$(_ssctl_list_nodes) ${logs_opts}" -- ${cur}) )
+            fi
+            return 0
             ;;
-        metrics)
-            COMPREPLY=($(compgen -W "--format -h --help" -- "$cur"))
-            return
+        probe)
+            local probe_opts="--url --json --timeout"
+            if [[ ${cur} == -* ]]; then
+                COMPREPLY=( $(compgen -W "${probe_opts}" -- ${cur}) )
+            else
+                COMPREPLY=( $(compgen -W "$(_ssctl_list_nodes) ${probe_opts}" -- ${cur}) )
+            fi
+            return 0
+            ;;
+        start|stop|restart|remove|switch)
+            COMPREPLY=( $(compgen -W "$(_ssctl_list_nodes)" -- ${cur}) )
+            return 0
+            ;;
+        add)
+            local add_opts="--server --port --method --password --plugin --plugin-opts --from-url --from-clipboard"
+            COMPREPLY=( $(compgen -W "${add_opts}" -- ${cur}) )
+            return 0
+            ;;
+        *)
             ;;
     esac
 
-    COMPREPLY=()
+    local first_arg="${COMP_WORDS[1]}"
+    case "${first_arg}" in
+        monitor)
+            local monitor_opts="--name --interval --count --tail --log --speed --stats-interval --filter --no-dns --ping --format --json --auto-switch --fail-threshold"
+            COMPREPLY=( $(compgen -W "${monitor_opts}" -- ${cur}) )
+            ;;
+        stats)
+            local stats_opts="--aggregate --format --watch --interval --json"
+            COMPREPLY=( $(compgen -W "${stats_opts}" -- ${cur}) )
+            ;;
+        logs|log)
+            local logs_opts="--follow -f --lines --tail -n --filter --since --until --format --raw"
+            COMPREPLY=( $(compgen -W "${logs_opts}" -- ${cur}) )
+            ;;
+    esac
 }
 
-if [ -n "${BASH_VERSION:-}" ]; then
-    complete -F _ssctl_completions ssctl
-elif [ -n "${ZSH_VERSION:-}" ]; then
-    autoload -U +X compinit && compinit
-    autoload -U +X bashcompinit && bashcompinit
-    complete -F _ssctl_completions ssctl
-fi
+complete -F _ssctl_completions ssctl
