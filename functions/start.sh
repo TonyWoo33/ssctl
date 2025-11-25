@@ -62,12 +62,26 @@ cmd_start(){
   [ -f "$engine_script" ] || die "不支持的 engine: $engine_dispatch"
 
   local engine_func="engine_${engine_dispatch}_get_service_def"
-  if ! declare -f "$engine_func" >/dev/null 2>&1; then
-    # shellcheck disable=SC1090
-    . "$engine_script"
-  fi
+  local engine_check_func="engine_${engine_dispatch}_compat_check"
+  local engine_pre_start_func="engine_${engine_dispatch}_pre_start"
+if ! declare -f "$engine_func" >/dev/null 2>&1; then
+  # shellcheck disable=SC1090
+  . "$engine_script"
+fi
+if ! declare -f pm_start_service >/dev/null 2>&1; then
+  # shellcheck disable=SC1090
+  . "${LIB_DIR}/lib/pm.sh"
+fi
   if ! declare -f "$engine_func" >/dev/null 2>&1; then
     die "engine ${engine_dispatch} 缺少接口：${engine_func}"
+  fi
+  if declare -f "$engine_check_func" >/dev/null 2>&1; then
+    if ! "$engine_check_func"; then
+      die "engine ${engine_dispatch} 兼容性检查失败"
+    fi
+  fi
+  if declare -f "$engine_pre_start_func" >/dev/null 2>&1; then
+    SSCTL_NODE_JSON="$target_json_path" SSCTL_NODE_NAME="$target_name" SSCTL_LOCAL_PORT="${DEFAULT_LOCAL_PORT:-1080}" "$engine_pre_start_func" || die "engine ${engine_dispatch} pre_start failed"
   fi
 
   local target_unit service_definition port
@@ -82,6 +96,18 @@ cmd_start(){
       target_unit="v2ray-${target_name}.service"
       service_definition="$("$engine_func" "$node_json")"
       ;;
+    hysteria2)
+      port="$(jq -r '.local_port // empty' <<<"$node_json")"
+      [ -n "$port" ] || port="$DEFAULT_LOCAL_PORT"
+      target_unit="sslocal-${target_name}-${port}.service"
+      service_definition="$("$engine_func" "$node_json")"
+      ;;
+    xray)
+      port="$(jq -r '.local_port // empty' <<<"$node_json")"
+      [ -n "$port" ] || port="$DEFAULT_LOCAL_PORT"
+      target_unit="sslocal-${target_name}-${port}.service"
+      service_definition="$("$engine_func" "$node_json")"
+      ;;
     *)
       target_unit="${engine_dispatch}-${target_name}.service"
       service_definition="$("$engine_func" "$node_json")"
@@ -89,22 +115,21 @@ cmd_start(){
   esac
 
   local unit_file_path=""
-  if ! unit_file_path="$(ssctl_service_create "$target_unit" "$service_definition")"; then
+  if ! unit_file_path="$(pm_generate_unit "$target_unit" "$service_definition")"; then
     die "服务 [${target_unit}] 创建失败。"
   fi
   if [ -z "$unit_file_path" ]; then
     die "服务 [${target_unit}] 创建成功但未返回 unit 路径。"
   fi
-  ok "已生成 unit: ${target_unit}"
 
-  if ! ssctl_service_reload; then
-    die "无法重载 systemd daemon"
+  if ! pm_daemon_reload; then
+    die "无法重新加载进程管理守护"
   fi
 
   local unit_glob_prefix="${target_unit%%-*}"
   local unit_glob="${unit_glob_prefix}-*.service"
-  ssctl_service_cache_unit_states "$unit_glob"
-  if ssctl_service_is_active "$target_unit"; then
+  pm_cache_unit_states "$unit_glob"
+  if pm_is_active "$target_unit"; then
     success "节点 '${target_name}' 已经处于活动状态。"
     return 0
   fi
@@ -113,16 +138,16 @@ cmd_start(){
   for unit_name in "${!__SSCTL_UNIT_STATE_CACHE[@]}"; do
     [ -n "$unit_name" ] || continue
     [ "$unit_name" = "$target_unit" ] && continue
-    if ssctl_service_is_active "$unit_name"; then
+    if pm_is_active "$unit_name"; then
       info "停止其他单元：$unit_name"
-      ssctl_service_stop "$unit_name" || warn "停止单元失败：$unit_name"
+      pm_stop_service "$unit_name" || warn "停止单元失败：$unit_name"
     fi
   done
 
-  if ! ssctl_service_link_and_enable "$unit_file_path" "$target_unit"; then
+  if ! pm_link_and_enable "$unit_file_path" "$target_unit"; then
     die "无法链接并启用单元：$target_unit"
   fi
-  if ! ssctl_service_start "$target_unit"; then
+  if ! pm_start_service "$target_unit"; then
     die "无法启动单元：$target_unit"
   fi
   success "已启动节点: $target_name"

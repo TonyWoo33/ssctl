@@ -135,6 +135,9 @@ pick_engine(){
     v2ray)
       echo "v2ray"
       ;;
+    hysteria2)
+      echo "hysteria2"
+      ;;
     *)
       die "不支持的 engine: $engine"
       ;;

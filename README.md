@@ -1,12 +1,20 @@
 # ssctl
 
-`ssctl` 是一个面向桌面与服务器用户的 Shadowsocks 控制平面脚本，基于 user-level systemd 实现节点的增删改查、单实例启动、日志/监控、订阅管理等功能。项目以 Bash 实现，支持 shadowsocks-rust (`sslocal`) 与 shadowsocks-libev (`ss-local`) 双引擎，可快速搭建本地代理环境。
+`ssctl` 是一个面向桌面与服务器用户的 Shadowsocks 控制平面脚本，基于 user-level systemd 实现节点的增删改查、单实例启动、日志/监控、订阅管理等功能。项目以 Bash 实现，支持 shadowsocks-rust (`sslocal`)、shadowsocks-libev (`ss-local`)、V2Ray (`v2ray`)、Hysteria2 (`hysteria`) 与 Xray (`xray`) 等多种引擎，可快速搭建本地代理环境；同时 v4.1.0 引入了跨平台的 Process Manager 抽象，可在 macOS launchd 上运行。
 
-> 当前版本：**v3.2.0**
+> 当前版本：**v4.1.0**
+
+## 支持协议 / 引擎
+
+- **Shadowsocks (rust/libev)**：自动根据加密算法选择 rust 或 libev 客户端。
+- **V2Ray**：通过 `lib/engines/v2ray.sh` 生成 systemd 单元并复用现有配置文件。
+- **Hysteria2**：v3.7.0 新增，自动生成 Hy2 YAML 配置（含带宽、TLS、SOCKS5）。
+- **Xray (VLESS/Reality)**：v4.0.0 新增，自动生成 Reality + VLESS 配置并以 `xray run -c …` 方式运行。
 
 ## 系统要求
 
 - **操作系统**：优先支持 GNU/Linux，要求 Bash ≥ 4、GNU coreutils（`date --iso-8601`）、user-level systemd。其他平台仅做有限验证。
+- **协议客户端**：视节点类型需要安装 `sslocal`（shadowsocks-rust）、`ss-local`（shadowsocks-libev）、`v2ray`、`hysteria`、`xray` 等二进制；`ssctl doctor` 会提示缺失项。
 - **速率采样**：`monitor --speed` 与 `ssctl stats` 依赖 Linux 的 `ss`（iproute2）或 macOS 的 `nettop`，缺失时将退化为“只看连通性”模式。
 - **探测与 ping**：`monitor --ping` 需要支持 `-W` 选项的 GNU ping（iputils/inetutils）；macOS 用户可通过 `brew install iputils` 或 `brew install inetutils` 获得兼容版本。
 - **macOS 提示**：建议安装 `coreutils`（提供 `gdate`）和 `gnu-ping`，但由于缺少 `ss`，速率采样仍不可用，仅能使用基础的节点管理与探测功能。
@@ -18,7 +26,7 @@
 - **运维工具链**：实时监控链路（`ssctl monitor` / `ssctl stats --watch`）、上下行速率统计、连通性体检（`probe`）、延迟测试（`latency`）、日志查看与高亮、二维码导出、环境变量快速注入。
 - **批量采样性能**：`latency` / `monitor` / `stats` 通过一次性读取节点 JSON 与 systemd 状态，避免在循环中反复调用 `jq` / `systemctl`，几十个节点也能保持流畅。
 - **鲁棒探测链路**：所有出网 `curl` 默认携带 `--connect-timeout 5 --max-time 10`，`probe` / `sub` 等命令在弱网环境下不会无限挂起。
-- **订阅同步**：解析 `ss://` 链接（含插件参数）并写入本地配置目录，支持批量更新。
+- **订阅同步与 TUI**：解析 `ss://` 链接（含插件参数）并写入本地配置目录，支持批量更新；内置 `ssctl tui`、Dashboard、Logs、Subscriptions 等交互式界面。
 - **集中配置+插件**：支持 `~/.config/ssctl/config.json` 调整默认 URL/颜色/体检策略；可在 `functions.d/` 挂载自定义子命令。
 - **命令行体验**：内建颜色输出、Bash/Zsh 补全脚本、友好的错误提示。
 - **智能化故障转移 (v3.3.0)**：`ssctl switch --best` 会逐个节点发起一次 TCP connect（`/dev/tcp`）并选出 RTT 最低的候选再自动切换；`ssctl monitor` 默认进入多节点 TUI，可启用 `--auto-switch --fail-threshold=N` 在 TUI 中自动切换。
@@ -86,7 +94,7 @@
    若使用 zsh，可改为 `~/.zshrc`。
 
 > **提示**  
-> `ssctl` 会使用 `~/.config/shadowsocks-rust/nodes` 作为节点存储目录，并在 `~/.config/systemd/user` 写入 user-level unit 文件。确保系统启用了 user-level systemd (`loginctl enable-linger $USER`)。
+> `ssctl` 会使用 `~/.config/ssctl/nodes` 作为节点存储目录，并在 `~/.config/systemd/user` 写入 user-level unit 文件。确保系统启用了 user-level systemd (`loginctl enable-linger $USER`)。
 
 ## 快速开始
 
@@ -112,7 +120,7 @@ ssctl probe hk --json | jq
 ssctl latency --json | jq
 ```
 
-节点配置位于 `~/.config/shadowsocks-rust/nodes/<name>.json`，可直接编辑后使用 `ssctl show` 检查。
+节点配置位于 `~/.config/ssctl/nodes/<name>.json`，可直接编辑后使用 `ssctl show` 检查。
 
 ## 智能化故障转移（v3.3.0）
 
@@ -241,8 +249,8 @@ ssctl latency --json | jq
 
 ## 订阅与节点格式
 
-- 本地节点保存在 `~/.config/shadowsocks-rust/nodes/<name>.json`，权限设置为 `600`。
-- 订阅信息保存在 `~/.config/shadowsocks-rust/subscriptions.json`，结构示例：
+- 本地节点保存在 `~/.config/ssctl/nodes/<name>.json`，权限设置为 `600`。
+- 订阅信息保存在 `~/.config/ssctl/subscriptions.json`，结构示例：
 
   ```json
   [

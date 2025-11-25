@@ -232,6 +232,10 @@ service_launchd_reload(){
   service_launchd_start "$@"
 }
 
+service_launchd_reload_daemon(){
+  return 0
+}
+
 service_launchd_start(){
   local unit="${1:?service_launchd_start 需要 unit 名称}"
   local plist_path; plist_path="$(service_launchd_plist_path "$unit")"
@@ -255,6 +259,15 @@ service_launchd_link_and_enable(){
   [ -n "$unit_name" ] || die "launchd: 需要 unit 名称以 enable"
   service_launchd_enable "$unit_name"
 }
+
+# Compat wrappers for PM abstraction
+launchd_start_service(){ service_launchd_start "$@"; }
+launchd_stop_service(){ service_launchd_stop "$@"; }
+launchd_is_active(){ service_launchd_is_active "$@"; }
+launchd_get_logs(){ service_launchd_get_logs "$@"; }
+launchd_reload_daemon(){ service_launchd_reload_daemon "$@"; }
+launchd_cache_unit_states(){ service_launchd_cache_unit_states "$@"; }
+launchd_link_and_enable(){ service_launchd_link_and_enable "$@"; }
 
 service_launchd_is_active(){
   local unit="${1:?service_launchd_is_active 需要 unit 名称}"

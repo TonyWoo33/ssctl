@@ -6,10 +6,10 @@ _ssctl_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    commands="start stop restart monitor stats latency probe add remove list logs log update doctor sub help version env clear current switch noproxy dashboard keep-alive"  
+    commands="start stop restart monitor stats latency probe add remove list logs log update doctor sub help version env clear current switch noproxy dashboard keep-alive tui"  
 
     _ssctl_list_nodes() {
-        local node_dir="${HOME}/.config/shadowsocks-rust/nodes"
+        local node_dir="${XDG_CONFIG_HOME:-$HOME/.config}/ssctl/nodes"
         if [ -d "$node_dir" ]; then
             find "$node_dir" -maxdepth 1 -name "*.json" -printf "%f\n" 2>/dev/null | sed 's/\.json$//'
         fi
@@ -61,7 +61,7 @@ _ssctl_completions() {
             return 0
             ;;
         add)
-            local add_opts="--server --port --method --password --plugin --plugin-opts --from-url --from-clipboard"
+            local add_opts="--server --port --method --password --plugin --plugin-opts --engine --from-url --from-clipboard"
             COMPREPLY=( $(compgen -W "${add_opts}" -- ${cur}) )
             return 0
             ;;
@@ -76,6 +76,10 @@ _ssctl_completions() {
                 COMPREPLY=( $(compgen -W "${ka_opts}" -- ${cur}) )
             fi
             return 0
+            ;;
+        tui)
+            local tui_opts="--help"
+            COMPREPLY=( $(compgen -W "${tui_opts}" -- ${cur}) )
             ;;
         *)
             ;;
