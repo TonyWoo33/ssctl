@@ -55,7 +55,6 @@ cmd_start(){
   local engine_dispatch="$engine"
   case "$engine_dispatch" in
     ""|auto|shadowsocks|rust|libev) engine_dispatch="shadowsocks" ;;
-    *) engine_dispatch="${engine_dispatch}" ;;
   esac
   require_safe_identifier "$engine_dispatch" "engine"
 

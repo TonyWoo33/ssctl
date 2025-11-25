@@ -8,7 +8,7 @@ draw_at(){
 
 draw_box(){
   local row="$1" col="$2" width="$3" height="$4" title="$5"
-  local horiz top bottom i
+  local horiz i
   horiz=$(printf '%*s' $((width-2)) '' | tr ' ' '-')
   draw_at "$row" "$col" "+${horiz}+"
   for ((i=1;i<height-1;i++)); do
