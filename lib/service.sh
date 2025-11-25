@@ -43,7 +43,7 @@ list_nodes(){
     [ -e "$f" ] || continue
     base="$(basename "${f%.json}")"
     case "$base" in
-      _libev_*) continue ;;
+      _libev_*|_rust_*) continue ;;
     esac
     if is_safe_identifier "$base"; then
       printf "%s\n" "$base"

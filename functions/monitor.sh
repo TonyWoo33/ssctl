@@ -628,6 +628,11 @@ run_single_node_monitor_mode(){
     if [ "$show_speed" -eq 1 ]; then
       local now_epoch
       now_epoch="$(date +%s)"
+      local sampler_config_cached sampler_type_label=""
+      sampler_config_cached="$(monitor_resolve_sampler_config "$node_json")"
+      if [ -n "$sampler_config_cached" ]; then
+        sampler_type_label="$(printf '%s\n' "$sampler_config_cached" | awk -F= '$1=="SAMPLER_TYPE"{print $2; exit}')"
+      fi
       if [ "$last_stats_epoch" -eq 0 ] || [ $(( now_epoch - last_stats_epoch )) -ge "$stats_interval" ]; then
         ssctl_service_cache_unit_states
         last_stats_entry="$(stats_collect_node "$node_json" "$now_epoch" "$stats_cache_dir")"
@@ -635,6 +640,9 @@ run_single_node_monitor_mode(){
       fi
       if [ -n "$last_stats_entry" ]; then
         IFS='|' read -r _ stats_valid stats_tx_rate stats_rx_rate stats_total_rate stats_tx_total stats_rx_total _ _ stats_warming stats_note <<<"$last_stats_entry"
+        if [ -z "$stats_note" ] && [ -n "$sampler_type_label" ]; then
+          stats_note="sampler:${sampler_type_label}"
+        fi
       fi
     fi
 
@@ -798,4 +806,40 @@ run_single_node_monitor_mode(){
   if [ "$show_logs" -eq 1 ]; then
     unset LOG_FILTER_TARGET LOG_FILTER_IP LOG_FILTER_PORT LOG_FILTER_METHOD LOG_FILTER_PROTOCOL LOG_FILTER_REGEX
   fi
+}
+monitor_resolve_sampler_config(){
+  local node_json="$1"
+  local engine
+  engine="$(jq -r '.engine // "shadowsocks"' <<<"$node_json")"
+  engine="${engine,,}"
+  require_safe_identifier "$engine" "engine 字段"
+
+  local app_lib_dir="${APP_LIB_DIR:-}"
+  if [ -z "$app_lib_dir" ]; then
+    if [ -n "${SSCTL_LIB_DIR:-}" ]; then
+      app_lib_dir="${SSCTL_LIB_DIR}/lib"
+    else
+      local base_dir
+      base_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null || pwd)"
+      app_lib_dir="${base_dir}/lib"
+    fi
+  fi
+
+  local engine_file="${app_lib_dir}/engines/${engine}.sh"
+  if [ ! -f "$engine_file" ]; then
+    warn "monitor: 找不到引擎文件：${engine_file}"
+    return 0
+  fi
+
+  local engine_config_func="engine_${engine}_get_sampler_config"
+  if ! declare -f "$engine_config_func" >/dev/null 2>&1; then
+    # shellcheck disable=SC1090
+    source "$engine_file"
+  fi
+  if ! declare -f "$engine_config_func" >/dev/null 2>&1; then
+    warn "monitor: 引擎 ${engine} 未实现 ${engine_config_func}"
+    return 0
+  fi
+
+  "$engine_config_func" "$node_json"
 }

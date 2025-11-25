@@ -6,7 +6,7 @@ _ssctl_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    commands="start stop restart monitor stats latency probe add remove list logs log update doctor sub help version env clear current switch noproxy"  
+    commands="start stop restart monitor stats latency probe add remove list logs log update doctor sub help version env clear current switch noproxy dashboard keep-alive"  
 
     _ssctl_list_nodes() {
         local node_dir="${HOME}/.config/shadowsocks-rust/nodes"
@@ -63,6 +63,18 @@ _ssctl_completions() {
         add)
             local add_opts="--server --port --method --password --plugin --plugin-opts --from-url --from-clipboard"
             COMPREPLY=( $(compgen -W "${add_opts}" -- ${cur}) )
+            return 0
+            ;;
+        sub)
+            local sub_cmds="add list remove update"
+            COMPREPLY=( $(compgen -W "${sub_cmds}" -- ${cur}) )
+            return 0
+            ;;
+        keep-alive)
+            local ka_opts="--url --interval --max-strikes --stabilization"
+            if [[ ${cur} == -* ]]; then
+                COMPREPLY=( $(compgen -W "${ka_opts}" -- ${cur}) )
+            fi
             return 0
             ;;
         *)

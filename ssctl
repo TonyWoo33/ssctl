@@ -74,7 +74,7 @@ short_usage(){
 
   start [name]  启动（含自检/单实例/自动生成 unit/启动后探测）
   stop  [name]  停止当前/指定节点
-  switch <name>|--best 切换或自动择优“当前节点”（仅切换，不启动）
+  switch <name>|--best 切换或自动择优“当前节点”（<name> 仅切换；--best 基于实时延迟自动切换）
   list          用表格列出所有节点（RUN 状态/端口/算法/引擎/UNIT）
   show [name] [--qrcode]
               查看节点配置、状态或生成二维码
@@ -84,6 +84,10 @@ short_usage(){
               [--speed] [--stats-interval S] [--filter key=value]
               [--auto-switch] [--fail-threshold=N]
               实时监控：连通性/时延/速率/成功率，可选输出日志与速率
+  dashboard [name]
+              全屏 TUI 仪表盘：系统流量/Session Peak/Hybrid Logs（按 q 退出）
+  keep-alive [interval] [max_strikes] [--url URL]
+              守护模式：定期检测当前节点连通性（默认 60s/3 次），失败即自动 switch --best
   stats [name|all] [--interval S] [--count N] [--aggregate] [--format text|json]
               采集实时上下行速率与累计量，可按节点或汇总输出
   logs [name] [--follow] [--filter key=value] [--format text|json]
@@ -92,7 +96,7 @@ short_usage(){
   latency|test  测试所有节点延迟并排序
   metrics [--format json|prom]
               输出节点状态指标（JSON 或 Prometheus）
-  sub           管理订阅 (add, list, remove, update [--force])
+  sub           管理订阅 (add/list/remove、update 批量刷新订阅 [--force])
   probe [name] [--url URL] [--json]
               Detect connectivity (ping/http) 并输出详情
   current      Show currently active node info
@@ -131,6 +135,12 @@ remove：
   - 加 -y/--yes 无需确认
   - 如 current 指向被删节点，会自动清空指向。
   
+switch：
+  - ssctl switch <name>
+      仅更新 current.json 指向，不自动启动，对应节点需再执行 ssctl start。
+  - ssctl switch --best
+      遍历全部节点并发起一次 TCP connect `/dev/tcp/<server>/<port>`，根据 RTT 选出最低延迟节点，打印获胜者并自动启动。
+  
   monitor：
   - ssctl monitor               # 监控 current 节点，默认每 5 秒测一次，带 DNS
   - ssctl monitor mynode --interval 2 --count 30
@@ -150,6 +160,22 @@ remove：
       CONN             time_connect（ms）
       SPEED(B/s)       speed_download（字节/秒）
     “--no-dns” 用 --socks5 + 1.1.1.1 仅测链路，不测域名解析
+
+dashboard：
+  - ssctl dashboard            # 进入全屏仪表盘，默认检测 current 节点
+  - ssctl dashboard mynode     # 指定节点
+  - 展示：系统级 RX/TX、Session Peak 自适应 Activity Bar、连接计数/延迟、Hybrid 日志（30s Heartbeat + 历史事件）
+  - 使用 tput 渲染，按 q 退出；安静场景也会显示心跳与最后一次事件
+
+keep-alive：
+  - ssctl keep-alive [interval] [max_strikes] [--url URL]
+      守护式连通性检测（默认 60s + 连续 3 次失败触发 switch --best）
+  - 支持自定义探测 URL/失败次数/切换后等待时间（--stabilization），并实时输出失败日志
+
+sub：
+  - ssctl sub add <alias> <url>      # 保存订阅
+  - ssctl sub list/remove/update …   # 更新或删除订阅，update 支持 all/alias、--force 批量覆盖
+  - `update` 会下载订阅、解码 Base64/SIP002 并批量生成节点 JSON（失败不影响其他订阅）
 
 logs：
   - ssctl log mynode --filter target=github.com --format json
@@ -285,6 +311,8 @@ main(){
     list|ls) cmd_list ;;
     show|status) cmd_show "${1:-}" ;;
     monitor) cmd_monitor "$@" ;;
+    dashboard) cmd_dashboard "$@" ;;
+    keep-alive|keepalive) cmd_keep_alive "$@" ;;
     stats)   cmd_stats "$@" ;;
     log|logs)
       cmd_log "$@"

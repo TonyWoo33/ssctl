@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
 
-# shellcheck disable=SC1091
-. "${LIB_DIR}/lib/engines/shadowsocks.sh"
-# shellcheck disable=SC1091
-. "${LIB_DIR}/lib/engines/v2ray.sh"
-
 cmd_start(){
   self_check
 
@@ -57,21 +52,40 @@ cmd_start(){
     node_json="$(jq -c --argjson cfg "$libev_run_config" '. + {__libev_run_config:$cfg}' <<<"$node_json")"
   fi
 
-  local target_unit service_definition=""
-  case "$engine" in
-    ""|auto|shadowsocks|rust|libev)
-      local port
+  local engine_dispatch="$engine"
+  case "$engine_dispatch" in
+    ""|auto|shadowsocks|rust|libev) engine_dispatch="shadowsocks" ;;
+    *) engine_dispatch="${engine_dispatch}" ;;
+  esac
+  require_safe_identifier "$engine_dispatch" "engine"
+
+  local engine_script="${LIB_DIR}/lib/engines/${engine_dispatch}.sh"
+  [ -f "$engine_script" ] || die "不支持的 engine: $engine_dispatch"
+
+  local engine_func="engine_${engine_dispatch}_get_service_def"
+  if ! declare -f "$engine_func" >/dev/null 2>&1; then
+    # shellcheck disable=SC1090
+    . "$engine_script"
+  fi
+  if ! declare -f "$engine_func" >/dev/null 2>&1; then
+    die "engine ${engine_dispatch} 缺少接口：${engine_func}"
+  fi
+
+  local target_unit service_definition port
+  case "$engine_dispatch" in
+    shadowsocks)
       port="$(jq -r '.local_port // empty' <<<"$node_json")"
       [ -n "$port" ] || port="$DEFAULT_LOCAL_PORT"
       target_unit="sslocal-${target_name}-${port}.service"
-      service_definition="$(engine_shadowsocks_get_service_def "$node_json")"
+      service_definition="$("$engine_func" "$node_json")"
       ;;
     v2ray)
       target_unit="v2ray-${target_name}.service"
-      service_definition="$(engine_v2ray_get_service_def "$node_json")"
+      service_definition="$("$engine_func" "$node_json")"
       ;;
     *)
-      die "不支持的 engine: $engine"
+      target_unit="${engine_dispatch}-${target_name}.service"
+      service_definition="$("$engine_func" "$node_json")"
       ;;
   esac
 

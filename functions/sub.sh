@@ -100,7 +100,7 @@ cmd_sub(){
           continue
         fi
 
-        info "正在处理订阅: $alias"
+        printf '[*] Updating subscription: %s (%s)\n' "$alias" "$url"
         local encoded_list
         if ! encoded_list=$(curl -sS --connect-timeout 5 --max-time 10 "$url"); then
           warn "下载失败: $alias ($url)"
@@ -117,7 +117,7 @@ cmd_sub(){
 
         echo "$decoded_list" | while read -r line; do
           if [[ "$line" == ss://* ]]; then
-            local method password server port plugin plugin_opts parsed_fragment
+            local method="" password="" server="" port="" plugin="" plugin_opts="" parsed_fragment=""
             if ! ssctl_parse_ss_uri "$line" method password server port plugin plugin_opts parsed_fragment; then
               warn "解析订阅项失败，已跳过。"
               continue

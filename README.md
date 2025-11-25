@@ -21,7 +21,7 @@
 - **订阅同步**：解析 `ss://` 链接（含插件参数）并写入本地配置目录，支持批量更新。
 - **集中配置+插件**：支持 `~/.config/ssctl/config.json` 调整默认 URL/颜色/体检策略；可在 `functions.d/` 挂载自定义子命令。
 - **命令行体验**：内建颜色输出、Bash/Zsh 补全脚本、友好的错误提示。
-- **智能化故障转移 (v3.2.0)**：`ssctl switch --best` 会解析 `latency --json` 结果并选出延迟最低的可用节点；`ssctl monitor` 默认进入多节点 TUI，可启用 `--auto-switch --fail-threshold=N` 在 TUI 中自动切换。
+- **智能化故障转移 (v3.3.0)**：`ssctl switch --best` 会逐个节点发起一次 TCP connect（`/dev/tcp`）并选出 RTT 最低的候选再自动切换；`ssctl monitor` 默认进入多节点 TUI，可启用 `--auto-switch --fail-threshold=N` 在 TUI 中自动切换。
 
 ## 安装与升级
 
@@ -114,9 +114,9 @@ ssctl latency --json | jq
 
 节点配置位于 `~/.config/shadowsocks-rust/nodes/<name>.json`，可直接编辑后使用 `ssctl show` 检查。
 
-## 智能化故障转移（v3.2.0）
+## 智能化故障转移（v3.3.0）
 
-- `ssctl switch --best [--url URL]` 会自动调用 `ssctl latency --json`，过滤出 `ok:true` 且 RTT>0 的节点，并切换到延迟最低的候选。选择完成后会立即启动该节点，确保链路恢复无需人工干预。
+- `ssctl switch --best` 会遍历所有节点，针对各自服务器发起一次 TCP connect（`/dev/tcp/server/port`），选出 RTT 最低的候选并立即切换且自启该节点，确保链路恢复无需人工干预。
 - `ssctl monitor` 现有两种模式：
   - **多节点 TUI（默认）**：不带 `--name` 时进入全屏仪表盘，按 `q` 可退出。`--auto-switch --fail-threshold=N` 会在 TUI 行内标注 `[AUTO X/N]` 并在达到阈值时触发 `ssctl switch --best`。
   - **单节点兼容模式**：带 `--name` 时保留 v3.0 时代的单行 `\r` 刷新输出，适合脚本和单节点调试。
@@ -202,10 +202,11 @@ ssctl latency --json | jq
 | `ssctl doctor [--install] [--without-clipboard] [...]` | 检测依赖、systemd 环境，可选自动安装或跳过部分可选依赖 |
 | `ssctl add <name> ...` | 新建或导入节点；支持 `--from-file`、`--from-clipboard`、手动参数 |
 | `ssctl start [name]` | 单实例启动节点，自动更新 `current.json` 并执行连通性探测 |
-| `ssctl switch <name> \| --best [--url URL]` | `<name>` 仅切换 `current.json` 指向；`--best` 会解析 `latency --json`，过滤 `ok:true` 且 RTT>0 的节点，并自动启动延迟最低的候选 |
+| `ssctl switch <name> \| --best` | `<name>` 仅切换 `current.json` 指向；`--best` 逐个节点执行 TCP connect（`/dev/tcp/server/port`）采样，选出 RTT 最低的候选并自动启动 |
 | `ssctl stop [name]` | 停止节点并移除对应 systemd unit |
 | `ssctl list` | 表格列出所有节点及运行状态 |
 | `ssctl monitor [name] [--interval S] [--tail] [--log] [--speed] [--json] [--auto-switch] [--fail-threshold=N]` | 实时监控链路质量：不带 `--name` 时进入多节点 TUI（并发探测、`tput` 渲染、支持 `q` 退出、TUI 中显示 `--auto-switch` 计数并触发 `switch --best`）；带 `--name` 时保留单节点单行 `\r` 刷新模式；`--speed` 依赖 `ss`/`nettop`，`--ping` 需 GNU ping |
+| `ssctl dashboard [name]` | 全屏 ASCII TUI 仪表盘：显示系统级 RX/TX、Session Peak 自适应 Activity Bar、连接计数/延迟、Hybrid Logs（30s Heartbeat + 历史事件）；按 `q` 退出 |
 | `ssctl log [name] [--follow] [--filter key=value] [--format json]` | 解析 CONNECT/UDP 目标，支持 target/ip/port/method/protocol/regex 过滤与 JSON 输出 |
 | `ssctl stats [name\|all] [--aggregate] [--format json] [--watch]` | 采集节点实时 TX/RX/TOTAL(B/s) 与累计量，依赖 `ss`/`nettop`；`--watch` 等价于 `monitor --speed` |
 | `ssctl probe\|journal [name] [--url URL] [--json]` | 快速体检：校验端口监听、SOCKS5 HTTP 连通性、链路探测（仅链路/带 DNS），支持 JSON 输出 |
@@ -216,8 +217,27 @@ ssctl latency --json | jq
 | `ssctl clear` | 清理所有 ssctl 生成的内容（保留 nodes/） |
 | `ssctl noproxy` | 停止所有代理单元并切换为直连模式 |
 | `ssctl env proxy [name]` | 输出代理环境变量导出命令，配合 `eval` 使用 |
+| `ssctl keep-alive [--interval S] [--max-strikes N] [--url URL]` | 守护式连通性检测：通过 SOCKS5 访问指定 URL，连续失败自动执行 `switch --best`（含自适应等待/心跳日志） |
 
 完整参数请查看 `ssctl help`。
+
+### 📊 Visual Dashboard (`ssctl dashboard`)
+
+- **全屏 ASCII 布局**：标题、Traffic/Status/Logs 三大区域，使用 `tput` 绝对定位，`q` 键随时退出。
+- **系统级流量**：读取默认出口网卡 `/sys/class/net/*/statistics/*`，Session Peak 自适应 Activity Bar，低速也能看到跳动；同时显示 RX/TX 速率（人类可读格式）。
+- **连接健康**：展示当前 ESTABLISHED 数量、对 8.8.8.8 的 TCP latency，和节点进程 uptime。
+- **Hybrid Logs**：实时读取最近 30s 日志，若静默成功则显示心跳时间并附带最后一次历史事件，避免“空白”误判；启用 `"verbose": true` 可看到更多成功/失败细节。
+
+### 🤖 Automation Suite
+
+- `ssctl keep-alive [interval] [max_strikes]`：守护式连通性检测（默认 60s/3 次），连续失败自动执行 `switch --best`，实时输出失败/恢复日志。
+- `ssctl sub update [alias|all] [--force]`：批量刷新订阅，自动解码 Base64/SIP002 并生成节点配置；失败不影响其他订阅。
+- `ssctl switch --best`：基于实时 TCP connect 延迟自动择优节点，配合 `keep-alive` 或 `monitor --auto-switch` 实现智能路由。
+
+### 🧩 Plugin Architecture (v3.6.0)
+
+- `start.sh` 与 `monitor.sh` 通过 `engine_${name}_*` 接口动态加载引擎（shadowsocks/libev/v2ray…），主逻辑不再硬编码协议。
+- 新协议（如 Hysteria、Tuic）只需在 `lib/engines/*.sh` 中实现 `get_service_def` / `get_sampler_config` 即可即插即用。
 
 ## 订阅与节点格式
 

@@ -3,18 +3,13 @@
 cmd_switch(){
   self_check
 
-  local use_best=0 latency_url="" show_help=0
+  local use_best=0 show_help=0
   local positional=()
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --best)
         use_best=1; shift ;;
-      --url)
-        [ $# -ge 2 ] || die "--url 需要一个参数"
-        latency_url="$2"; shift 2 ;;
-      --url=*)
-        latency_url="${1#*=}"; shift ;;
       -h|--help)
         show_help=1; shift ;;
       --)
@@ -36,29 +31,25 @@ cmd_switch(){
 cat <<'DOC'
 用法：
   ssctl switch <name>
-  ssctl switch --best [--url URL]
+  ssctl switch --best
 说明：
   - 更新 current.json 指向指定节点，但不会自动启动。
-  - --best 会调用 latency --json，选择延迟最低且 ok:true 的节点。
-  - --url 仅在 --best 模式下生效，用于覆盖 latency 采样 URL。
+  - --best 会遍历所有节点，通过 ping 选择即时 RTT 最低的节点。
 DOC
     return 0
-  fi
-
-  if [ "$use_best" -eq 0 ] && [ -n "$latency_url" ]; then
-    die "--url 仅可与 --best 一起使用"
   fi
 
   local name="${positional[0]:-}" best_latency=""
   if [ "$use_best" -eq 1 ]; then
     [ -z "$name" ] || die "--best 模式下无需指定节点名"
     local best_candidate_name="" best_candidate_latency=""
-    if ! switch_pick_best_candidate "$latency_url" best_candidate_name best_candidate_latency; then
+    info "Testing latencies..."
+    if ! switch_pick_best_candidate best_candidate_name best_candidate_latency; then
       return 1
     fi
     name="$best_candidate_name"
     best_latency="$best_candidate_latency"
-    info "自动选择节点：${name}（${best_latency} ms）"
+    info "Winner: ${name}（${best_latency} ms）"
   else
     [ -n "$name" ] || die "用法：ssctl switch <name> 或 ssctl switch --best"
   fi
@@ -80,52 +71,98 @@ DOC
 }
 
 switch_pick_best_candidate(){
-  local latency_url="$1" out_name_var="${2:-}" out_latency_var="${3:-}"
+  local out_name_var="${1:-}" out_latency_var="${2:-}"
   [ -n "$out_name_var" ] || die "内部错误：缺少 name 输出引用"
   [ -n "$out_latency_var" ] || die "内部错误：缺少 latency 输出引用"
 
-  local payload=""
-  payload="$(switch_fetch_latency_payload "$latency_url")"
-  local best_json=""
-  if ! best_json="$(jq -er '
-    .results
-    | map(select((.ok == true)
-                 and (.latency_ms | type == "number")
-                 and (.latency_ms > 0)))
-    | if length == 0 then error("no candidates") else sort_by(.latency_ms) | .[0] end
-  ' <<<"$payload" 2>/dev/null)"; then
-    die "未找到可用节点（latency 结果均为 INACTIVE/timeout）"
-    return 1
+  local nodes=()
+  while read -r node; do
+    [ -n "$node" ] || continue
+    nodes+=("$node")
+  done < <(list_nodes)
+  if [ ${#nodes[@]} -eq 0 ]; then
+    die "未找到节点"
   fi
 
-  local best_name="" best_latency=""
-  best_name="$(jq -r '.name' <<<"$best_json")"
-  best_latency="$(jq -r '.latency_ms' <<<"$best_json")"
+  local best_name="" best_latency_value="" best_rank="" success_count=0
+  local node_json
+  while IFS= read -r node_json || [ -n "$node_json" ]; do
+    [ -n "$node_json" ] || continue
+    local name server server_port
+    name="$(jq -r '.__name' <<<"$node_json")"
+    server="$(jq -r '.server // empty' <<<"$node_json")"
+    if [[ "$name" == *local* ]]; then
+      warn "跳过 local 测试节点：${name}"
+      continue
+    fi
+    if [ -z "$server" ]; then
+      warn "节点 ${name} 缺少 server 字段，已跳过"
+      continue
+    fi
+    server_port="$(jq -r '.server_port // .port // empty' <<<"$node_json")"
+    if [ -z "$server_port" ] || [ "$server_port" = "null" ]; then
+      warn "节点 ${name} 缺少 server_port/port 字段，已跳过"
+      continue
+    fi
+
+    local latency_display="" latency_rank=""
+    if switch_tcp_probe_latency "$server" "$server_port" latency_display latency_rank; then
+      success_count=$((success_count + 1))
+      printf '  [+] %s: %sms\n' "$name" "$latency_display" >&2
+      if [ -z "$best_name" ] || [ "$latency_rank" -lt "$best_rank" ]; then
+        best_name="$name"
+        best_latency_value="$latency_display"
+        best_rank="$latency_rank"
+      fi
+    else
+      printf '  [-] %s: timeout/unreachable\n' "$name" >&2
+      warn "节点 ${name} TCP 探测失败"
+    fi
+  done < <(nodes_json_stream "${nodes[@]}")
+
+  if [ "$success_count" -eq 0 ]; then
+    warn "未找到可用节点（ping 全部失败）"
+    return 1
+  fi
+  if [ -z "$best_name" ]; then
+    die "No reachable nodes found via ping."
+  fi
+
   printf -v "$out_name_var" '%s' "$best_name"
-  printf -v "$out_latency_var" '%s' "$best_latency"
+  printf -v "$out_latency_var" '%s' "$best_latency_value"
   return 0
 }
 
-switch_fetch_latency_payload(){
-  local latency_url="$1"
-  local latency_args=(--json)
-  if [ -n "$latency_url" ]; then
-    latency_args+=("--url" "$latency_url")
+switch_tcp_probe_latency(){
+  local server="$1" port="$2" normalized_var="${3:-}" rank_var="${4:-}"
+  [ -n "$normalized_var" ] || die "内部错误：缺少 normalized 输出引用"
+  [ -n "$rank_var" ] || die "内部错误：缺少 rank 输出引用"
+  local start_ts end_ts
+  start_ts="$(switch_now_ms)" || return 1
+  if timeout 1 bash -c "cat < /dev/null > /dev/tcp/${server}/${port}" >/dev/null 2>&1; then
+    end_ts="$(switch_now_ms)" || return 1
+    local delta=$((end_ts - start_ts))
+    [ "$delta" -ge 0 ] || delta=0
+    printf -v "$normalized_var" '%s' "$delta"
+    printf -v "$rank_var" '%s' "$delta"
+    return 0
   fi
+  return 1
+}
 
-  if declare -F cmd_latency >/dev/null 2>&1; then
-    cmd_latency "${latency_args[@]}"
-    return
+switch_now_ms(){
+  local out=""
+  if out="$(date +%s%3N 2>/dev/null)"; then
+    printf '%s\n' "$out"
+    return 0
   fi
-  if [ -n "${SSCTL_SELF_PATH:-}" ] && [ -x "${SSCTL_SELF_PATH}" ]; then
-    "${SSCTL_SELF_PATH}" latency "${latency_args[@]}"
-    return
+  local epoch=""
+  epoch="$(date +%s 2>/dev/null || true)"
+  if [ -n "$epoch" ]; then
+    printf '%s\n' "$((epoch * 1000))"
+    return 0
   fi
-  if command -v ssctl >/dev/null 2>&1; then
-    ssctl latency "${latency_args[@]}"
-    return
-  fi
-  die "未找到 latency 命令（请确保 ssctl 在 PATH 或已加载 cmd_latency）"
+  return 1
 }
 
 switch_auto_start_node(){
