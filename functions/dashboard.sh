@@ -30,7 +30,7 @@ draw_bar(){
     filled=1
   fi
   ((filled<0)) && filled=0
-  local bar filled_part empty_part
+  local filled_part empty_part
   filled_part=$(printf '%*s' "$filled" '' | tr ' ' '#')
   empty_part=$(printf '%*s' $((inner-filled)) '' | tr ' ' ' ')
   draw_at "$row" "$col" "[${filled_part}${empty_part}]"
