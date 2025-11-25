@@ -122,7 +122,7 @@ fi
     die "服务 [${target_unit}] 创建成功但未返回 unit 路径。"
   fi
 
-  if ! pm_daemon_reload; then
+  if ! pm_daemon_reload "$target_unit"; then
     die "无法重新加载进程管理守护"
   fi
 

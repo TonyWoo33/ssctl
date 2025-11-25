@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # functions/tui.sh
 # TUI Module for ssctl v4.0.0-dev
 
@@ -54,7 +55,7 @@ tui_dashboard_menu() {
         tput ed # Clear rest of screen
 
         # Non-blocking read (1 sec timeout)
-        read -t 1 -n 1 -s key
+        read -r -t 1 -n 1 -s key
         if [[ "$key" == "q" ]]; then
             break
         fi
@@ -70,7 +71,8 @@ tui_node_list_menu() {
     # Load nodes (hide internal ones starting with _)
     for f in "$HOME/.config/ssctl/nodes/"*.json; do
         [ -e "$f" ] || continue
-        local fname=$(basename "$f" .json)
+        local fname
+        fname=$(basename "$f" .json)
         [[ "$fname" == _* ]] && continue
         nodes+=("$fname")
     done
@@ -87,7 +89,7 @@ tui_node_list_menu() {
         echo "=== Node List (Up/Down to Select, Enter to Switch, q to Back) ===$(tput el)"
         
         for i in "${!nodes[@]}"; do
-            if [ $i -eq $selected ]; then
+            if [ "$i" -eq "$selected" ]; then
                 echo "> ${nodes[$i]}$(tput el)"
             else
                 echo "  ${nodes[$i]}$(tput el)"
@@ -96,9 +98,9 @@ tui_node_list_menu() {
         tput ed # Clear rest of screen
 
         # Read input (3 chars for arrows)
-        read -rsn1 key
+        read -r -s -n 1 key
         if [[ "$key" == $'\x1b' ]]; then
-            read -rsn2 key
+            read -r -s -n 2 key
             if [[ "$key" == "[A" ]]; then # Up
                 ((selected--))
                 [ $selected -lt 0 ] && selected=0
@@ -121,7 +123,7 @@ tui_node_list_menu() {
             fi
             
             echo "Done. Press any key..."
-            read -n 1 -s
+            read -r -n 1 -s
             tput civis
         elif [[ "$key" == "q" ]]; then
             break
@@ -136,7 +138,7 @@ tui_logs_menu(){
     node="$(tui_detect_active_node)"
     if [ -z "$node" ]; then
         echo "No active node found. Start a node first."
-        read -n 1 -s -r -p "Press any key to return..."
+        read -r -n 1 -s -p "Press any key to return..."
         clear
         return
     fi
@@ -162,13 +164,13 @@ tui_sub_menu(){
         echo -n "Select option: "
         tput ed
 
-        read -n 1 -s key
+        read -r -n 1 -s key
         case "$key" in
             1)
                 echo ""
                 echo "Updating subscriptions..."
                 bash "$0" sub update
-                read -n 1 -s -r -p "Press any key to return..."
+                read -r -n 1 -s -p "Press any key to return..."
                 clear
                 ;;
             2)
@@ -188,7 +190,7 @@ tui_sub_menu(){
                     fi
                 fi
                 echo ""
-                read -n 1 -s -r -p "Press any key to return..."
+                read -r -n 1 -s -p "Press any key to return..."
                 clear
                 ;;
             0|q|Q)
@@ -221,7 +223,7 @@ cmd_tui() {
         echo -n "Select option: "
         tput ed
 
-        read -n 1 -s key
+        read -r -n 1 -s key
         
         case "$key" in
             1) tui_dashboard_menu; clear ;;
